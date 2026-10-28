@@ -27,9 +27,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.core.GpuRenderController
 import com.example.ui.BrowserViewModel
 import com.example.ui.theme.LocalGlassStyle
 import kotlinx.coroutines.delay
@@ -38,8 +40,9 @@ import kotlin.math.abs
 import kotlin.math.pow
 
 /**
- * Hardware-accelerated live WebView browser surface with elastic rubber-band overscroll
- * at document top/bottom boundaries and automatic tab preview snapshot capture.
+ * Full-bleed live WebView surface (extending edge-to-edge to the bottom with no wallpaper behind or below),
+ * supporting dynamic Force GPU Rendering, Disable Hardware Overlays, elastic rubber-band overscroll,
+ * and automatic webpage snapshot capture.
  */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
@@ -47,6 +50,8 @@ fun WebBrowserView(
     tabId: Long,
     url: String,
     isPrivate: Boolean,
+    forceGpuRendering: Boolean,
+    disableHardwareOverlays: Boolean,
     webCommand: BrowserViewModel.WebCommand?,
     onConsumeCommand: () -> Unit,
     onPageStarted: (tabId: Long, url: String) -> Unit,
@@ -93,9 +98,19 @@ fun WebBrowserView(
         onConsumeCommand()
     }
 
-    // Periodically capture crisp tab thumbnail once page settles
+    // Re-apply GPU rendering & hardware overlay settings whenever toggled in Settings
+    LaunchedEffect(webViewRef, forceGpuRendering, disableHardwareOverlays) {
+        val wv = webViewRef ?: return@LaunchedEffect
+        GpuRenderController.applyWebViewGpuPipeline(
+            webView = wv,
+            forceGpuRendering = forceGpuRendering,
+            disableHardwareOverlays = disableHardwareOverlays
+        )
+    }
+
+    // Capture crisp tab & backdrop thumbnail once page settles
     LaunchedEffect(tabId, url) {
-        delay(900L)
+        delay(850L)
         webViewRef?.let { wv ->
             captureWebViewThumbnail(wv)?.let { bmp ->
                 onSnapshotLatest(tabId, bmp)
@@ -125,10 +140,19 @@ fun WebBrowserView(
                 .testTag("active_webview")
                 .graphicsLayer {
                     translationY = rubberY.value
+                    compositingStrategy = if (forceGpuRendering || disableHardwareOverlays) {
+                        CompositingStrategy.Offscreen
+                    } else {
+                        CompositingStrategy.Auto
+                    }
                 },
             factory = { ctx ->
                 WebView(ctx).apply {
-                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                    GpuRenderController.applyWebViewGpuPipeline(
+                        webView = this,
+                        forceGpuRendering = forceGpuRendering,
+                        disableHardwareOverlays = disableHardwareOverlays
+                    )
                     isVerticalScrollBarEnabled = true
                     overScrollMode = View.OVER_SCROLL_NEVER
 
@@ -144,7 +168,7 @@ fun WebBrowserView(
                         cacheMode = if (isPrivate) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
                     }
 
-                    // Rubber-band spring touch handler at WebView top & bottom limits
+                    // Rubber-band spring touch handler at WebView top & bottom limits + snapshot refresh
                     var lastTouchY = 0f
                     var isDraggingEdge = false
                     setOnTouchListener { view, event ->
@@ -186,6 +210,13 @@ fun WebBrowserView(
                                     }
                                     isDraggingEdge = false
                                 }
+                                // Refresh webpage snapshot for live frosted bottom bar & tab preview
+                                scope.launch {
+                                    delay(240L)
+                                    captureWebViewThumbnail(wv)?.let { bmp ->
+                                        onSnapshotLatest(currentTabId, bmp)
+                                    }
+                                }
                             }
                         }
                         false
@@ -208,6 +239,11 @@ fun WebBrowserView(
                             super.onPageFinished(view, finishedUrl)
                             val wv = view ?: return
                             val finalUrl = finishedUrl ?: wv.url.orEmpty()
+                            // Ensure bottom webpage content can scroll comfortably above the floating glass bar
+                            wv.evaluateJavascript(
+                                "(function(){if(document&&document.body){document.body.style.paddingBottom='88px';}})();",
+                                null
+                            )
                             onFinishedLatest(
                                 currentTabId,
                                 finalUrl,
@@ -237,6 +273,11 @@ fun WebBrowserView(
             },
             update = { wv ->
                 webViewRef = wv
+                GpuRenderController.applyWebViewGpuPipeline(
+                    webView = wv,
+                    forceGpuRendering = forceGpuRendering,
+                    disableHardwareOverlays = disableHardwareOverlays
+                )
                 if (url.isNotBlank() && wv.url != url && wv.originalUrl != url) {
                     wv.loadUrl(url)
                 }

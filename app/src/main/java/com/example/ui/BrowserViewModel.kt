@@ -565,6 +565,22 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { repository.setHighRefreshRateEnabled(enabled) }
     }
 
+    fun setForceGpuRendering(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        viewModelScope.launch {
+            repository.setForceGpuRendering(enabled)
+            showToast(if (enabled) "Force GPU Rendering enabled" else "Force GPU Rendering off")
+        }
+    }
+
+    fun setDisableHardwareOverlays(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        viewModelScope.launch {
+            repository.setDisableHardwareOverlays(enabled)
+            showToast(if (enabled) "Hardware Overlays disabled (GPU compositing)" else "Hardware Overlays allowed")
+        }
+    }
+
     fun saveCurrentPageToFavorites() {
         val tab = uiState.value.activeTab ?: return
         if (tab.url.isBlank()) return

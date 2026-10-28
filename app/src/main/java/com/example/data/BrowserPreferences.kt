@@ -21,6 +21,8 @@ data class BrowserSettingsState(
     val sfxEnabled: Boolean = true,
     val hapticsEnabled: Boolean = true,
     val highRefreshRateEnabled: Boolean = true,
+    val forceGpuRendering: Boolean = true,
+    val disableHardwareOverlays: Boolean = true,
     val activeTabId: Long = -1L,
     val isPrivateMode: Boolean = false
 )
@@ -33,6 +35,8 @@ class BrowserPreferences(private val context: Context) {
         val SFX_ENABLED = booleanPreferencesKey("sfx_enabled")
         val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
         val HIGH_REFRESH_ENABLED = booleanPreferencesKey("high_refresh_enabled")
+        val FORCE_GPU_RENDERING = booleanPreferencesKey("force_gpu_rendering")
+        val DISABLE_HW_OVERLAYS = booleanPreferencesKey("disable_hw_overlays")
         val ACTIVE_TAB_ID = longPreferencesKey("active_tab_id")
         val IS_PRIVATE_MODE = booleanPreferencesKey("is_private_mode")
     }
@@ -44,6 +48,8 @@ class BrowserPreferences(private val context: Context) {
             sfxEnabled = prefs[Keys.SFX_ENABLED] ?: true,
             hapticsEnabled = prefs[Keys.HAPTICS_ENABLED] ?: true,
             highRefreshRateEnabled = prefs[Keys.HIGH_REFRESH_ENABLED] ?: true,
+            forceGpuRendering = prefs[Keys.FORCE_GPU_RENDERING] ?: true,
+            disableHardwareOverlays = prefs[Keys.DISABLE_HW_OVERLAYS] ?: true,
             activeTabId = prefs[Keys.ACTIVE_TAB_ID] ?: -1L,
             isPrivateMode = prefs[Keys.IS_PRIVATE_MODE] ?: false
         )
@@ -67,6 +73,14 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setHighRefreshRateEnabled(enabled: Boolean) {
         context.browserDataStore.edit { it[Keys.HIGH_REFRESH_ENABLED] = enabled }
+    }
+
+    suspend fun setForceGpuRendering(enabled: Boolean) {
+        context.browserDataStore.edit { it[Keys.FORCE_GPU_RENDERING] = enabled }
+    }
+
+    suspend fun setDisableHardwareOverlays(enabled: Boolean) {
+        context.browserDataStore.edit { it[Keys.DISABLE_HW_OVERLAYS] = enabled }
     }
 
     suspend fun setActiveTab(tabId: Long, isPrivate: Boolean) {

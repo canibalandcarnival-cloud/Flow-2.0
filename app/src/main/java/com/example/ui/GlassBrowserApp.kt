@@ -39,7 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -56,6 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
 import com.example.core.DisplayRefreshRateManager
+import com.example.core.GpuRenderController
 import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
 import com.example.ui.components.LocalSpatialBackdrop
@@ -95,6 +96,21 @@ fun GlassBrowserApp(
             displayCapability = DisplayRefreshRateManager.applyHighRefreshRate(
                 activity = activity,
                 enabled = uiState.settings.highRefreshRateEnabled
+            )
+        }
+    }
+
+    // Apply Force GPU Rendering & Disable Hardware Overlays live to Activity Window & DecorView
+    LaunchedEffect(
+        uiState.settings.forceGpuRendering,
+        uiState.settings.disableHardwareOverlays
+    ) {
+        val activity = context as? Activity
+        if (activity != null) {
+            GpuRenderController.applyWindowGpuPipeline(
+                activity = activity,
+                forceGpuRendering = uiState.settings.forceGpuRendering,
+                disableHardwareOverlays = uiState.settings.disableHardwareOverlays
             )
         }
     }
@@ -149,16 +165,26 @@ fun GlassBrowserApp(
         configureBlurLayer(sceneBlurredLayer, barBlurPx)
     }
 
+    val activeTab = uiState.activeTab
+    val activeWebSnapshot = activeTab?.let { viewModel.tabSnapshots[it.id] }
+
+    // Never expose the Start Page wallpaper fallback when viewing a site!
     val spatialBackdrop = remember(
         wallpaperBlurredLayer,
         sceneBlurredLayer,
+        uiState.isViewingWebPage,
         uiState.resolvedWallpaper?.blurredBitmap,
+        activeWebSnapshot,
         rootSize
     ) {
         SpatialBackdropState(
             wallpaperBlurredLayer = wallpaperBlurredLayer,
             sceneBlurredLayer = sceneBlurredLayer,
-            fallbackBlurredBitmap = uiState.resolvedWallpaper?.blurredBitmap,
+            fallbackBlurredBitmap = if (uiState.isViewingWebPage) {
+                activeWebSnapshot
+            } else {
+                uiState.resolvedWallpaper?.blurredBitmap
+            },
             rootSize = rootSize
         )
     }
@@ -179,11 +205,18 @@ fun GlassBrowserApp(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black)
+                    .background(style.glassBaseColor)
                     .onSizeChanged { rootSize = it }
+                    .graphicsLayer {
+                        compositingStrategy = if (uiState.settings.disableHardwareOverlays || uiState.settings.forceGpuRendering) {
+                            CompositingStrategy.Offscreen
+                        } else {
+                            CompositingStrategy.Auto
+                        }
+                    }
             ) {
                 // =========================================================================
-                // PLANE 1: Untinted Wallpaper + Active Browser Content (Recorded into sceneBlurredLayer)
+                // PLANE 1: Active Browser Content (Wallpaper ONLY on Start Page; Full-Bleed Site on WebView)
                 // =========================================================================
                 Box(
                     modifier = Modifier
@@ -199,56 +232,71 @@ fun GlassBrowserApp(
                             scaleY = backgroundZoomScale
                         }
                 ) {
-                    // 1A. Pure, 100% Untinted Wallpaper (NO white or black tint in Light or Dark Mode!)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .drawWithContent {
-                                drawContent()
-                                wallpaperBlurredLayer.record {
-                                    this@drawWithContent.drawContent()
-                                }
+                    if (activeTab != null && activeTab.url.isNotBlank()) {
+                        // Viewing a live site: NO wallpaper rendered behind or below!
+                        // Draw live webpage snapshot into the Compose canvas underneath AndroidView
+                        // so floating frosted glass bars blur the site itself (never wallpaper).
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(style.glassBaseColor)
+                        ) {
+                            if (activeWebSnapshot != null) {
+                                Image(
+                                    bitmap = activeWebSnapshot,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
                             }
-                    ) {
-                        val resolvedWp = uiState.resolvedWallpaper
-                        if (resolvedWp != null) {
-                            Image(
-                                bitmap = resolvedWp.fullBitmap,
-                                contentDescription = null,
-                                colorFilter = null, // Strictly untinted!
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        } else {
-                            Image(
-                                painter = painterResource(id = R.drawable.wp_forest_canopy),
-                                contentDescription = null,
-                                colorFilter = null, // Strictly untinted!
-                                contentScale = ContentScale.Crop,
+                            WebBrowserView(
+                                tabId = activeTab.id,
+                                url = activeTab.url,
+                                isPrivate = activeTab.isPrivate,
+                                forceGpuRendering = uiState.settings.forceGpuRendering,
+                                disableHardwareOverlays = uiState.settings.disableHardwareOverlays,
+                                webCommand = webCommand,
+                                onConsumeCommand = viewModel::consumeWebCommand,
+                                onPageStarted = viewModel::onWebPageStarted,
+                                onProgressChanged = viewModel::onWebProgressChanged,
+                                onPageFinished = viewModel::onWebPageFinished,
+                                onSnapshotCaptured = viewModel::updateTabSnapshot,
+                                onEdgeBounce = viewModel.feedback::onEdgeBounce,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
-                    }
-
-                    // 1B. Start Page Hub OR Live Hardware WebView
-                    val activeTab = uiState.activeTab
-                    if (activeTab != null && activeTab.url.isNotBlank()) {
-                        WebBrowserView(
-                            tabId = activeTab.id,
-                            url = activeTab.url,
-                            isPrivate = activeTab.isPrivate,
-                            webCommand = webCommand,
-                            onConsumeCommand = viewModel::consumeWebCommand,
-                            onPageStarted = viewModel::onWebPageStarted,
-                            onProgressChanged = viewModel::onWebProgressChanged,
-                            onPageFinished = viewModel::onWebPageFinished,
-                            onSnapshotCaptured = viewModel::updateTabSnapshot,
-                            onEdgeBounce = viewModel.feedback::onEdgeBounce,
+                    } else {
+                        // Start Page / Hub: Render 100% Untinted Wallpaper + Hub Content
+                        Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(bottom = navBottomInset + 72.dp)
-                        )
-                    } else {
+                                .drawWithContent {
+                                    drawContent()
+                                    wallpaperBlurredLayer.record {
+                                        this@drawWithContent.drawContent()
+                                    }
+                                }
+                        ) {
+                            val resolvedWp = uiState.resolvedWallpaper
+                            if (resolvedWp != null) {
+                                Image(
+                                    bitmap = resolvedWp.fullBitmap,
+                                    contentDescription = null,
+                                    colorFilter = null, // Strictly untinted!
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Image(
+                                    painter = painterResource(id = R.drawable.wp_forest_canopy),
+                                    contentDescription = null,
+                                    colorFilter = null, // Strictly untinted!
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+
                         BrowserHubContent(
                             uiState = uiState,
                             topContentPadding = statusTopInset + 74.dp,
@@ -404,6 +452,8 @@ fun GlassBrowserApp(
                         },
                         onDeleteCustomWallpaper = viewModel::deleteCustomWallpaper,
                         onToggleHighRefresh = viewModel::setHighRefreshRateEnabled,
+                        onToggleForceGpu = viewModel::setForceGpuRendering,
+                        onToggleDisableHwOverlays = viewModel::setDisableHardwareOverlays,
                         onToggleSfx = viewModel::setSfxEnabled,
                         onToggleHaptics = viewModel::setHapticsEnabled,
                         onCloseAllTabs = viewModel::closeAllCurrentModeTabs,

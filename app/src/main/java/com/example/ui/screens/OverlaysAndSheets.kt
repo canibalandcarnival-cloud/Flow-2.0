@@ -365,6 +365,8 @@ fun WallpaperAndSettingsSheet(
     onImportWallpaperClick: () -> Unit,
     onDeleteCustomWallpaper: (CustomWallpaperEntity) -> Unit,
     onToggleHighRefresh: (Boolean) -> Unit,
+    onToggleForceGpu: (Boolean) -> Unit,
+    onToggleDisableHwOverlays: (Boolean) -> Unit,
     onToggleSfx: (Boolean) -> Unit,
     onToggleHaptics: (Boolean) -> Unit,
     onCloseAllTabs: () -> Unit,
@@ -766,6 +768,20 @@ fun WallpaperAndSettingsSheet(
                             checked = uiState.settings.highRefreshRateEnabled,
                             onCheckedChange = onToggleHighRefresh,
                             tag = "toggle_360hz"
+                        )
+                        MonochromeToggleRow(
+                            title = stringResource(R.string.force_gpu_rendering_label),
+                            subtitle = stringResource(R.string.force_gpu_rendering_subtitle),
+                            checked = uiState.settings.forceGpuRendering,
+                            onCheckedChange = onToggleForceGpu,
+                            tag = "toggle_force_gpu_rendering"
+                        )
+                        MonochromeToggleRow(
+                            title = stringResource(R.string.disable_hw_overlays_label),
+                            subtitle = stringResource(R.string.disable_hw_overlays_subtitle),
+                            checked = uiState.settings.disableHardwareOverlays,
+                            onCheckedChange = onToggleDisableHwOverlays,
+                            tag = "toggle_disable_hw_overlays"
                         )
                         MonochromeToggleRow(
                             title = stringResource(R.string.sfx_feedback_label),

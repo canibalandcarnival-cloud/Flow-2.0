@@ -20,6 +20,10 @@
     <string name="import_wallpaper_label">Import</string>
     <string name="motion_and_feedback_title">Physics, Audio &amp; Display</string>
     <string name="refresh_rate_360_label">Up to 360Hz High Refresh Engine</string>
+    <string name="force_gpu_rendering_label">Force GPU Rendering</string>
+    <string name="force_gpu_rendering_subtitle">Force hardware GPU acceleration for 2D drawing &amp; WebView tiles</string>
+    <string name="disable_hw_overlays_label">Disable Hardware Overlays</string>
+    <string name="disable_hw_overlays_subtitle">Always use GPU for unified screen compositing</string>
     <string name="sfx_feedback_label">Glass Sound Effects (SFX)</string>
     <string name="haptic_feedback_label">Tactile Haptic Feedback</string>
     <string name="new_tab_group_title">New Tab Group</string>
