@@ -51,7 +51,7 @@ class ExampleRobolectricTest {
         assertEquals("https://dezeen.com", BrowserRepository.normalizeUrlOrSearch("dezeen.com"))
         assertTrue(
             BrowserRepository.normalizeUrlOrSearch("minimalist ceramics")
-                .startsWith("https://duckduckgo.com/?q=")
+                .startsWith("https://www.google.com/search?q=")
         )
     }
 

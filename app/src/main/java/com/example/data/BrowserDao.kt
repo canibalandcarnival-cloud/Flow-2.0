@@ -58,6 +58,9 @@ interface BrowserDao {
     @Query("DELETE FROM bookmarks WHERE id = :id")
     suspend fun deleteBookmarkById(id: Long)
 
+    @Query("UPDATE bookmarks SET title = 'Google Search', url = 'https://www.google.com' WHERE url = 'https://duckduckgo.com'")
+    suspend fun migrateLegacySearchBookmarkToGoogle()
+
     // History
     @Query("SELECT * FROM history_entries ORDER BY visitedAt DESC LIMIT 150")
     fun observeHistory(): Flow<List<HistoryEntryEntity>>

@@ -187,12 +187,14 @@ class BrowserRepository(
                         folder = "Design"
                     ),
                     BookmarkEntity(
-                        title = "DuckDuckGo Privacy Search",
-                        url = "https://duckduckgo.com",
+                        title = "Google Search",
+                        url = "https://www.google.com",
                         folder = "Search"
                     )
                 )
             )
+        } else {
+            dao.migrateLegacySearchBookmarkToGoogle()
         }
 
         if (dao.countTabs() == 0) {
@@ -426,7 +428,7 @@ class BrowserRepository(
             return if (looksLikeDomain) {
                 "https://$trimmed"
             } else {
-                "https://duckduckgo.com/?q=${Uri.encode(trimmed)}"
+                "https://www.google.com/search?q=${Uri.encode(trimmed)}"
             }
         }
 
