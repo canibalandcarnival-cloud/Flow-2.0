@@ -397,11 +397,13 @@ class BrowserRepository(
         } catch (_: Throwable) {}
         dao.deleteCustomWallpaperById(entity.id)
         if (currentSelectedId == "custom:${entity.id}") {
-            preferences.setSelectedWallpaper("preset:forest")
+            preferences.setSelectedWallpaper("preset:prism_waves")
         }
     }
 
     suspend fun setDarkMode(dark: Boolean) = preferences.setDarkMode(dark)
+    suspend fun setFrostedGlassEnabled(enabled: Boolean) = preferences.setFrostedGlassEnabled(enabled)
+    suspend fun setGlassBackdropMode(mode: GlassBackdropMode) = preferences.setGlassBackdropMode(mode)
     suspend fun setSelectedWallpaper(id: String) = preferences.setSelectedWallpaper(id)
     suspend fun setSfxEnabled(enabled: Boolean) = preferences.setSfxEnabled(enabled)
     suspend fun setHapticsEnabled(enabled: Boolean) = preferences.setHapticsEnabled(enabled)

@@ -65,12 +65,27 @@ object GoogleWebSessionManager {
     }
 
     fun buildStandardBrowserUserAgent(context: Context): String {
+        BrowserEngineInitializer.sanitizeWebViewVariationsSeeds(context)
         val raw = try {
             WebSettings.getDefaultUserAgent(context)
         } catch (_: Throwable) {
             null
         }
         return sanitizeBrowserUserAgent(raw)
+    }
+
+    /**
+     * Checks on-disk WebView profile storage without spinning up the Chromium provider so cold
+     * Start Page launches do not unnecessarily initialize WebView when no cookies exist yet.
+     */
+    fun hasPersistedWebViewCookieStore(context: Context): Boolean {
+        return runCatching {
+            val webViewDir = context.getDir("webview", Context.MODE_PRIVATE)
+            val defaultCookies = java.io.File(webViewDir, "Default/Cookies")
+            val legacyCookies = java.io.File(webViewDir, "Cookies")
+            (defaultCookies.isFile && defaultCookies.length() > 0L) ||
+                (legacyCookies.isFile && legacyCookies.length() > 0L)
+        }.getOrDefault(false)
     }
 
     /**
@@ -83,6 +98,7 @@ object GoogleWebSessionManager {
         webView: WebView,
         isPrivate: Boolean
     ) {
+        BrowserEngineInitializer.sanitizeWebViewVariationsSeeds(context)
         try {
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)

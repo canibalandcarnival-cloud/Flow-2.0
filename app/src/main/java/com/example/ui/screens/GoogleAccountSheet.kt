@@ -71,6 +71,7 @@ import com.example.data.BrowserRepository
 import com.example.data.BrowserSettingsState
 import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
+import com.example.ui.components.GlassModalBackdrop
 import com.example.ui.components.bouncyClickable
 import com.example.ui.theme.LocalGlassStyle
 
@@ -399,23 +400,17 @@ fun GoogleAccountSignInOverlay(
         }
     }
 
-    Box(
+    GlassModalBackdrop(
+        scrimAlpha = 0.38f,
+        onDismiss = {
+            if (isSessionAuthenticated) {
+                finishWithProfile(authWebView)
+            } else {
+                onDismissLatest()
+            }
+        },
         contentAlignment = Alignment.BottomCenter,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(style.glassBaseColor.copy(alpha = 0.56f))
-            .statusBarsPadding()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {
-                    if (isSessionAuthenticated) {
-                        finishWithProfile(authWebView)
-                    } else {
-                        onDismissLatest()
-                    }
-                }
-            )
+        modifier = Modifier.statusBarsPadding()
     ) {
         FrostedGlassBox(
             shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),

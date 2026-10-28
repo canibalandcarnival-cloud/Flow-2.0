@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -63,10 +64,12 @@ import com.example.R
 import com.example.core.DisplayRefreshRateManager
 import com.example.core.GpuRenderController
 import com.example.core.OsShellManager
+import com.example.data.GlassBackdropMode
 import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
 import com.example.ui.components.LocalSpatialBackdrop
 import com.example.ui.components.SpatialBackdropState
+import com.example.ui.components.clearBlurLayer
 import com.example.ui.components.configureBlurLayer
 import com.example.ui.screens.AddressSearchOverlay
 import com.example.ui.screens.BottomBrowserGlassBar
@@ -81,6 +84,7 @@ import com.example.ui.theme.GlassBrowserTheme
 import com.example.ui.theme.LocalGlassStyle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.math.roundToInt
 
 @Composable
 fun GlassBrowserApp(
@@ -238,36 +242,80 @@ fun GlassBrowserApp(
         }
     }
 
-    // Hardware GraphicsLayer for static Start Page wallpaper blur (zero per-scroll-frame recording!)
+    // Hardware GraphicsLayers for multi-plane spatial frosted glass:
+    // - wallpaperBlurredLayer: static Start Page wallpaper blur for inner Hub cards
+    // - sceneBlurredLayer: full Start Page scene (wallpaper + Hub cards) for floating bars & overlays
+    // - webSceneBlurredLayer: settled live webpage snapshot blur (zero recording during active WebView scroll)
     val wallpaperBlurredLayer = rememberGraphicsLayer()
+    val sceneBlurredLayer = rememberGraphicsLayer()
+    val webSceneBlurredLayer = rememberGraphicsLayer()
 
-    val cardBlurPx = with(density) { uiState.deviceProfile.cardBlurDp.dp.toPx() }
+    val blurMultiplier = if (uiState.settings.glassBackdropMode == GlassBackdropMode.DEEP_FROST) {
+        1.38f
+    } else {
+        1.0f
+    }
+    val cardBlurPx = with(density) { (uiState.deviceProfile.cardBlurDp * blurMultiplier).dp.toPx() }
+    val barBlurPx = with(density) { (uiState.deviceProfile.barBlurDp * blurMultiplier).dp.toPx() }
 
-    LaunchedEffect(wallpaperBlurredLayer, cardBlurPx) {
-        configureBlurLayer(wallpaperBlurredLayer, cardBlurPx)
+    LaunchedEffect(
+        wallpaperBlurredLayer,
+        sceneBlurredLayer,
+        webSceneBlurredLayer,
+        cardBlurPx,
+        barBlurPx,
+        uiState.settings.frostedGlassEnabled
+    ) {
+        if (uiState.settings.frostedGlassEnabled) {
+            configureBlurLayer(wallpaperBlurredLayer, cardBlurPx)
+            configureBlurLayer(sceneBlurredLayer, barBlurPx)
+            configureBlurLayer(webSceneBlurredLayer, barBlurPx)
+        } else {
+            clearBlurLayer(wallpaperBlurredLayer)
+            clearBlurLayer(sceneBlurredLayer)
+            clearBlurLayer(webSceneBlurredLayer)
+        }
     }
 
     val activeTab = uiState.activeTab
+    val activeWebSnapshot = activeTab?.let { viewModel.tabSnapshots[it.id] }
+    val activeWebBlurredSnapshot = activeTab?.let { viewModel.tabBlurredSnapshots[it.id] }
 
-    // Never expose the Start Page wallpaper when viewing a site, and never re-record live scrolling WebView frames!
     val spatialBackdrop = remember(
         wallpaperBlurredLayer,
+        sceneBlurredLayer,
+        webSceneBlurredLayer,
         uiState.isViewingWebPage,
+        uiState.settings.frostedGlassEnabled,
+        uiState.settings.glassBackdropMode,
         uiState.resolvedWallpaper?.blurredBitmap,
+        activeWebSnapshot,
+        activeWebBlurredSnapshot,
         rootSize
     ) {
-        if (uiState.isViewingWebPage) {
-            SpatialBackdropState(
+        when {
+            !uiState.settings.frostedGlassEnabled -> SpatialBackdropState(
                 wallpaperBlurredLayer = null,
                 sceneBlurredLayer = null,
                 fallbackBlurredBitmap = null,
+                fallbackCardBlurredBitmap = null,
+                backdropMode = uiState.settings.glassBackdropMode,
                 rootSize = rootSize
             )
-        } else {
-            SpatialBackdropState(
+            uiState.isViewingWebPage -> SpatialBackdropState(
+                wallpaperBlurredLayer = if (activeWebSnapshot != null) webSceneBlurredLayer else null,
+                sceneBlurredLayer = if (activeWebSnapshot != null) webSceneBlurredLayer else null,
+                fallbackBlurredBitmap = activeWebBlurredSnapshot,
+                fallbackCardBlurredBitmap = activeWebBlurredSnapshot,
+                backdropMode = uiState.settings.glassBackdropMode,
+                rootSize = rootSize
+            )
+            else -> SpatialBackdropState(
                 wallpaperBlurredLayer = wallpaperBlurredLayer,
-                sceneBlurredLayer = wallpaperBlurredLayer,
+                sceneBlurredLayer = sceneBlurredLayer,
                 fallbackBlurredBitmap = uiState.resolvedWallpaper?.blurredBitmap,
+                fallbackCardBlurredBitmap = uiState.resolvedWallpaper?.blurredBitmap,
+                backdropMode = uiState.settings.glassBackdropMode,
                 rootSize = rootSize
             )
         }
@@ -282,7 +330,10 @@ fun GlassBrowserApp(
     val statusTopInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
-    GlassBrowserTheme(darkTheme = uiState.settings.isDarkMode) {
+    GlassBrowserTheme(
+        darkTheme = uiState.settings.isDarkMode,
+        frostedGlassEnabled = uiState.settings.frostedGlassEnabled
+    ) {
         val style = LocalGlassStyle.current
 
         CompositionLocalProvider(LocalSpatialBackdrop provides spatialBackdrop) {
@@ -310,7 +361,40 @@ fun GlassBrowserApp(
                         )
                 ) {
                     if (activeTab != null && activeTab.url.isNotBlank()) {
-                        // Viewing a live site: Dedicated isolated WebView composite layer, NO wallpaper or snapshot behind!
+                        // Offscreen settled webpage backdrop recorder (draws 0 pixels to screen, 0 touch interception, 0 active-scroll work)
+                        if (uiState.settings.frostedGlassEnabled && activeWebSnapshot != null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .drawWithContent {
+                                        val bmp = activeWebSnapshot
+                                        if (size.width > 0f && size.height > 0f && bmp.width > 0 && bmp.height > 0) {
+                                            webSceneBlurredLayer.record {
+                                                val scale = maxOf(
+                                                    size.width / bmp.width.coerceAtLeast(1),
+                                                    size.height / bmp.height.coerceAtLeast(1)
+                                                )
+                                                val dstW = (bmp.width * scale).roundToInt()
+                                                val dstH = (bmp.height * scale).roundToInt()
+                                                val offsetX = ((size.width - dstW) / 2f).roundToInt()
+                                                val offsetY = ((size.height - dstH) / 2f).roundToInt()
+                                                drawImage(
+                                                    image = bmp,
+                                                    dstOffset = IntOffset(offsetX, offsetY),
+                                                    dstSize = IntSize(dstW, dstH)
+                                                )
+                                            }
+                                        }
+                                    }
+                            )
+                        }
+
+                        val isAnyModalBackdropOpen = uiState.isAddressOverlayOpen ||
+                            uiState.isSettingsSheetOpen ||
+                            uiState.isGoogleSignInSheetOpen ||
+                            isNewGroupDialogOpen
+
+                        // Viewing a live site: Dedicated isolated WebView composite layer
                         WebBrowserView(
                             tabId = activeTab.id,
                             url = activeTab.url,
@@ -321,6 +405,7 @@ fun GlassBrowserApp(
                             disableGpuVsync = uiState.settings.disableGpuVsync,
                             disableFrameRateLimit = uiState.settings.disableFrameRateLimit,
                             isTabSwitcherOpen = uiState.isTabSwitcherOpen,
+                            isOverlayBackdropRequested = isAnyModalBackdropOpen,
                             deviceProfile = uiState.deviceProfile,
                             webCommand = webCommand,
                             onConsumeCommand = viewModel::consumeWebCommand,
@@ -334,50 +419,74 @@ fun GlassBrowserApp(
                             modifier = Modifier.fillMaxSize()
                         )
                     } else {
-                        // OS Home / Start Page Hub: Render 100% Untinted Wallpaper + Hub Content
+                        // OS Home / Start Page Hub: Render 100% Untinted Backdrop Wallpaper + Hub Content
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .drawWithContent {
-                                    drawContent()
-                                    wallpaperBlurredLayer.record {
-                                        this@drawWithContent.drawContent()
+                                .then(
+                                    if (uiState.settings.frostedGlassEnabled) {
+                                        Modifier.drawWithContent {
+                                            drawContent()
+                                            sceneBlurredLayer.record {
+                                                this@drawWithContent.drawContent()
+                                            }
+                                        }
+                                    } else {
+                                        Modifier
                                     }
-                                }
+                                )
                         ) {
-                            val resolvedWp = uiState.resolvedWallpaper
-                            if (resolvedWp != null) {
-                                Image(
-                                    bitmap = resolvedWp.fullBitmap,
-                                    contentDescription = null,
-                                    colorFilter = null, // Strictly untinted!
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                Image(
-                                    painter = painterResource(id = R.drawable.wp_forest_canopy),
-                                    contentDescription = null,
-                                    colorFilter = null, // Strictly untinted!
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer()
+                                    .then(
+                                        if (uiState.settings.frostedGlassEnabled) {
+                                            Modifier.drawWithContent {
+                                                drawContent()
+                                                wallpaperBlurredLayer.record {
+                                                    this@drawWithContent.drawContent()
+                                                }
+                                            }
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
+                            ) {
+                                val resolvedWp = uiState.resolvedWallpaper
+                                if (resolvedWp != null) {
+                                    Image(
+                                        bitmap = resolvedWp.fullBitmap,
+                                        contentDescription = null,
+                                        colorFilter = null, // Strictly untinted!
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.img_prism_waves),
+                                        contentDescription = null,
+                                        colorFilter = null, // Strictly untinted!
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                             }
-                        }
 
-                        BrowserHubContent(
-                            uiState = uiState,
-                            topContentPadding = statusTopInset + 74.dp,
-                            bottomContentPadding = navBottomInset + 92.dp,
-                            onOpenUrl = viewModel::openUrlOrSearch,
-                            onToggleShowAllFavorites = viewModel::toggleShowAllFavorites,
-                            onToggleShowAllReadingList = viewModel::toggleShowAllReadingList,
-                            onOpenCustomizeSheet = { viewModel.setSettingsSheetOpen(true) },
-                            onDeleteReadingItem = viewModel::removeReadingListItem,
-                            onDeleteBookmark = viewModel::removeBookmark,
-                            onClearHistory = viewModel::clearBrowsingHistory,
-                            onEdgeBounce = viewModel.feedback::onEdgeBounce
-                        )
+                            BrowserHubContent(
+                                uiState = uiState,
+                                topContentPadding = statusTopInset + 74.dp,
+                                bottomContentPadding = navBottomInset + 92.dp,
+                                onOpenUrl = viewModel::openUrlOrSearch,
+                                onToggleShowAllFavorites = viewModel::toggleShowAllFavorites,
+                                onToggleShowAllReadingList = viewModel::toggleShowAllReadingList,
+                                onOpenCustomizeSheet = { viewModel.setSettingsSheetOpen(true) },
+                                onDeleteReadingItem = viewModel::removeReadingListItem,
+                                onDeleteBookmark = viewModel::removeBookmark,
+                                onClearHistory = viewModel::clearBrowsingHistory,
+                                onEdgeBounce = viewModel.feedback::onEdgeBounce
+                            )
+                        }
                     }
                 }
 
@@ -522,6 +631,8 @@ fun GlassBrowserApp(
                         displayCapability = displayCapability,
                         osRoleStatus = osRoleStatus,
                         onSelectDarkMode = viewModel::setDarkMode,
+                        onToggleFrostedGlass = viewModel::setFrostedGlassEnabled,
+                        onSelectBackdropMode = viewModel::setGlassBackdropMode,
                         onGoogleSignInClick = viewModel::openGoogleSignInSheet,
                         onGoogleManageAccountClick = viewModel::openGoogleAccountManagement,
                         onGoogleSignOutClick = viewModel::signOutGoogleAccount,

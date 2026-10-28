@@ -70,6 +70,7 @@ import com.example.ui.BrowserViewModel
 import com.example.ui.components.bouncyClickable
 import com.example.ui.theme.LocalGlassStyle
 import com.example.ui.theme.PureBlack
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -107,6 +108,7 @@ fun WebBrowserView(
     disableGpuVsync: Boolean = true,
     disableFrameRateLimit: Boolean = true,
     isTabSwitcherOpen: Boolean = false,
+    isOverlayBackdropRequested: Boolean = false,
     deviceProfile: DeviceOptimizationManager.DeviceProfile,
     webCommand: BrowserViewModel.WebCommand?,
     onConsumeCommand: () -> Unit,
@@ -131,6 +133,7 @@ fun WebBrowserView(
     val scope = rememberCoroutineScope()
     val rubberY = remember { Animatable(0f) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var settleSnapshotJob by remember { mutableStateOf<Job?>(null) }
 
     // Track inline HTML5 <video>, WebChromeClient fullscreen video, and OAuth/federated popup windows
     var isInlineVideoPlaying by remember(tabId) { mutableStateOf(false) }
@@ -257,8 +260,8 @@ fun WebBrowserView(
         }
     }
 
-    LaunchedEffect(isTabSwitcherOpen) {
-        if (isTabSwitcherOpen) {
+    LaunchedEffect(isTabSwitcherOpen, isOverlayBackdropRequested) {
+        if (isTabSwitcherOpen || isOverlayBackdropRequested) {
             webViewRef?.let { wv ->
                 captureWebViewThumbnail(wv, currentDeviceProfile)?.let { bmp ->
                     onSnapshotLatest(currentTabId, bmp)
@@ -343,6 +346,7 @@ fun WebBrowserView(
                         val wv = view as WebView
                         when (event.actionMasked) {
                             MotionEvent.ACTION_DOWN -> {
+                                settleSnapshotJob?.cancel()
                                 lastTouchY = event.rawY
                                 isDraggingEdge = false
                             }
@@ -386,6 +390,14 @@ fun WebBrowserView(
                                         )
                                     }
                                     isDraggingEdge = false
+                                }
+                                // Refresh glass backdrop snapshot only after scroll settles (zero active-scroll cost)
+                                settleSnapshotJob?.cancel()
+                                settleSnapshotJob = scope.launch {
+                                    delay(260L)
+                                    captureWebViewThumbnail(wv, currentDeviceProfile)?.let { bmp ->
+                                        onSnapshotLatest(currentTabId, bmp)
+                                    }
                                 }
                             }
                         }

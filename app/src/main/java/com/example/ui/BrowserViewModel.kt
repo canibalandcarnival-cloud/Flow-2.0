@@ -23,8 +23,10 @@ import com.example.data.BrowserSettingsState
 import com.example.data.BrowserTabEntity
 import com.example.data.CustomWallpaperEntity
 import com.example.data.FavoriteSiteEntity
+import com.example.data.GlassBackdropMode
 import com.example.data.HistoryEntryEntity
 import com.example.data.ReadingListItemEntity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +35,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class TopHubSection {
     START_PAGE,
@@ -109,8 +112,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         DeviceOptimizationManager.detectProfile(application)
     val feedback = FeedbackManager(application)
 
-    // In-memory live webpage thumbnail snapshots keyed by tabId, bounded by device RAM tier
+    // In-memory live webpage thumbnail & blurred backdrop snapshots keyed by tabId, bounded by device RAM tier
     val tabSnapshots = mutableStateMapOf<Long, ImageBitmap>()
+    val tabBlurredSnapshots = mutableStateMapOf<Long, ImageBitmap>()
     private val snapshotLruOrder = LinkedHashSet<Long>()
 
     // Trigger counter for WebView actions (reload / back / forward)
@@ -216,11 +220,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         viewModelScope.launch {
+            val app = getApplication<Application>()
+            withContext(Dispatchers.IO) {
+                BrowserEngineInitializer.sanitizeWebViewVariationsSeeds(app)
+            }
             repository.ensureSeeded()
-            if (GoogleWebSessionManager.isGoogleSessionActive()) {
+            seededFlow.value = true
+            val hasCookieStore = withContext(Dispatchers.IO) {
+                GoogleWebSessionManager.hasPersistedWebViewCookieStore(app)
+            }
+            if (hasCookieStore && GoogleWebSessionManager.isGoogleSessionActive()) {
                 repository.setGoogleAccountSession(signedIn = true)
             }
-            seededFlow.value = true
         }
         viewModelScope.launch {
             combine(
@@ -580,6 +591,17 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 ?: break
             snapshotLruOrder.remove(evictCandidate)
             tabSnapshots.remove(evictCandidate)
+            tabBlurredSnapshots.remove(evictCandidate)
+        }
+
+        // Compute silky StackBlurred backdrop bitmap off the main thread for zero-jank glassmorphism
+        viewModelScope.launch {
+            val blurred = withContext(Dispatchers.Default) {
+                WallpaperLuminanceAnalyzer.blurSnapshotBitmap(bitmap, deviceProfile)
+            }
+            if (blurred != null && tabSnapshots.containsKey(tabId)) {
+                tabBlurredSnapshots[tabId] = blurred
+            }
         }
     }
 
@@ -595,6 +617,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             val toRemove = tabSnapshots.keys.filter { it != activeId }
             toRemove.forEach { id ->
                 tabSnapshots.remove(id)
+                tabBlurredSnapshots.remove(id)
                 snapshotLruOrder.remove(id)
             }
         }
@@ -636,6 +659,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             val state = uiState.value
             val remaining = state.allTabs.filter { it.id != tab.id && it.isPrivate == tab.isPrivate }
             tabSnapshots.remove(tab.id)
+            tabBlurredSnapshots.remove(tab.id)
             snapshotLruOrder.remove(tab.id)
             repository.closeTab(tab.id)
             if (remaining.isEmpty()) {
@@ -710,6 +734,28 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         feedback.onSegmentSwitch()
         viewModelScope.launch {
             repository.setDarkMode(dark)
+        }
+    }
+
+    fun setFrostedGlassEnabled(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        viewModelScope.launch {
+            repository.setFrostedGlassEnabled(enabled)
+            showToast(if (enabled) "Frosted Glass enabled" else "Frosted Glass off")
+        }
+    }
+
+    fun setGlassBackdropMode(mode: GlassBackdropMode) {
+        feedback.onSegmentSwitch()
+        viewModelScope.launch {
+            repository.setGlassBackdropMode(mode)
+            val label = when (mode) {
+                GlassBackdropMode.PRISM_AURA -> "Prism Aura"
+                GlassBackdropMode.LIVE_SCENE -> "Live Optical"
+                GlassBackdropMode.STUDIO_HALO -> "Studio Halo"
+                GlassBackdropMode.DEEP_FROST -> "Deep Frost"
+            }
+            showToast("Glass backdrop: $label")
         }
     }
 

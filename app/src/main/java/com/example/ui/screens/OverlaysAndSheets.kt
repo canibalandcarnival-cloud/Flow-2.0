@@ -1,7 +1,12 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -81,10 +86,13 @@ import com.example.core.DisplayRefreshRateManager
 import com.example.core.OsShellManager
 import com.example.core.WallpaperLuminanceAnalyzer
 import com.example.data.CustomWallpaperEntity
+import com.example.data.GlassBackdropMode
 import com.example.ui.BrowserUiState
 import com.example.ui.components.EyeglassesIcon
 import com.example.ui.components.FrostedGlassBox
+import com.example.ui.components.GlassBackdropModeSelector
 import com.example.ui.components.GlassElevation
+import com.example.ui.components.GlassModalBackdrop
 import com.example.ui.components.bouncyClickable
 import com.example.ui.components.rememberPhysicalMomentumFlingBehavior
 import com.example.ui.components.rubberBandOverscroll
@@ -114,16 +122,10 @@ fun AddressSearchOverlay(
         focusRequester.requestFocus()
     }
 
-    Box(
-        contentAlignment = Alignment.BottomCenter,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(style.glassBaseColor.copy(alpha = 0.35f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss
-            )
+    GlassModalBackdrop(
+        scrimAlpha = 0.28f,
+        onDismiss = onDismiss,
+        contentAlignment = Alignment.BottomCenter
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -364,6 +366,8 @@ fun WallpaperAndSettingsSheet(
     displayCapability: DisplayRefreshRateManager.DisplayCapability,
     osRoleStatus: OsShellManager.OsRoleStatus,
     onSelectDarkMode: (Boolean) -> Unit,
+    onToggleFrostedGlass: (Boolean) -> Unit,
+    onSelectBackdropMode: (GlassBackdropMode) -> Unit,
     onGoogleSignInClick: () -> Unit,
     onGoogleManageAccountClick: () -> Unit,
     onGoogleSignOutClick: () -> Unit,
@@ -389,32 +393,30 @@ fun WallpaperAndSettingsSheet(
     val liveFps by DisplayRefreshRateManager.observeLiveFps().collectAsState(initial = displayCapability.activeHz)
     val momentumFling = rememberPhysicalMomentumFlingBehavior()
 
-    BoxWithConstraints(
-        contentAlignment = Alignment.BottomCenter,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(style.glassBaseColor.copy(alpha = 0.32f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss
-            )
+    GlassModalBackdrop(
+        scrimAlpha = 0.26f,
+        onDismiss = onDismiss,
+        contentAlignment = Alignment.BottomCenter
     ) {
-        val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
-        FrostedGlassBox(
-            shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-            elevation = GlassElevation.MODAL_OVERLAY,
-            useLiveSceneBackdrop = true,
-            modifier = Modifier
-                .widthIn(max = metrics.sheetMaxWidth)
-                .fillMaxWidth()
-                .testTag("settings_wallpaper_sheet")
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {}
-                )
+        BoxWithConstraints(
+            contentAlignment = Alignment.BottomCenter,
+            modifier = Modifier.fillMaxSize()
         ) {
+            val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
+            FrostedGlassBox(
+                shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+                elevation = GlassElevation.MODAL_OVERLAY,
+                useLiveSceneBackdrop = true,
+                modifier = Modifier
+                    .widthIn(max = metrics.sheetMaxWidth)
+                    .fillMaxWidth()
+                    .testTag("settings_wallpaper_sheet")
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
+                    )
+            ) {
             LazyColumn(
                 flingBehavior = momentumFling,
                 contentPadding = PaddingValues(
@@ -586,6 +588,25 @@ fun WallpaperAndSettingsSheet(
                                     }
                                 }
                             }
+                        }
+
+                        MonochromeToggleRow(
+                            title = stringResource(R.string.frosted_glass_label),
+                            subtitle = stringResource(R.string.frosted_glass_subtitle),
+                            checked = uiState.settings.frostedGlassEnabled,
+                            onCheckedChange = onToggleFrostedGlass,
+                            tag = "toggle_frosted_glass"
+                        )
+
+                        AnimatedVisibility(
+                            visible = uiState.settings.frostedGlassEnabled,
+                            enter = fadeIn() + expandVertically(spring(dampingRatio = 0.72f, stiffness = 360f)),
+                            exit = fadeOut() + shrinkVertically()
+                        ) {
+                            GlassBackdropModeSelector(
+                                selectedMode = uiState.settings.glassBackdropMode,
+                                onSelectMode = onSelectBackdropMode
+                            )
                         }
                     }
                 }
@@ -929,6 +950,7 @@ fun WallpaperAndSettingsSheet(
         }
     }
 }
+}
 
 @Composable
 private fun CustomWallpaperTile(
@@ -1022,7 +1044,9 @@ private fun MonochromeToggleRow(
         shape = RoundedCornerShape(20.dp),
         elevation = GlassElevation.CARD,
         useLiveSceneBackdrop = false,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1152,16 +1176,10 @@ fun NewTabGroupDialog(
         focusRequester.requestFocus()
     }
 
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(style.glassBaseColor.copy(alpha = 0.42f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss
-            )
+    GlassModalBackdrop(
+        scrimAlpha = 0.34f,
+        onDismiss = onDismiss,
+        contentAlignment = Alignment.Center
     ) {
         FrostedGlassBox(
             shape = RoundedCornerShape(28.dp),

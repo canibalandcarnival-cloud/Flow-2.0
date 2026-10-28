@@ -15,9 +15,23 @@ private val Context.browserDataStore: DataStore<Preferences> by preferencesDataS
     name = "glass_browser_prefs"
 )
 
+enum class GlassBackdropMode(val storageKey: String) {
+    PRISM_AURA("prism_aura"),
+    LIVE_SCENE("live_scene"),
+    STUDIO_HALO("studio_halo"),
+    DEEP_FROST("deep_frost");
+
+    companion object {
+        fun fromKey(key: String?): GlassBackdropMode =
+            entries.firstOrNull { it.storageKey == key } ?: PRISM_AURA
+    }
+}
+
 data class BrowserSettingsState(
     val isDarkMode: Boolean = true,
-    val selectedWallpaperId: String = "preset:forest",
+    val frostedGlassEnabled: Boolean = true,
+    val glassBackdropMode: GlassBackdropMode = GlassBackdropMode.PRISM_AURA,
+    val selectedWallpaperId: String = "preset:prism_waves",
     val sfxEnabled: Boolean = true,
     val hapticsEnabled: Boolean = true,
     val highRefreshRateEnabled: Boolean = true,
@@ -39,6 +53,8 @@ class BrowserPreferences(private val context: Context) {
 
     private object Keys {
         val IS_DARK_MODE = booleanPreferencesKey("is_dark_mode")
+        val FROSTED_GLASS_ENABLED = booleanPreferencesKey("frosted_glass_enabled")
+        val GLASS_BACKDROP_MODE = stringPreferencesKey("glass_backdrop_mode")
         val SELECTED_WALLPAPER_ID = stringPreferencesKey("selected_wallpaper_id")
         val SFX_ENABLED = booleanPreferencesKey("sfx_enabled")
         val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
@@ -60,7 +76,9 @@ class BrowserPreferences(private val context: Context) {
     val settingsFlow: Flow<BrowserSettingsState> = context.browserDataStore.data.map { prefs ->
         BrowserSettingsState(
             isDarkMode = prefs[Keys.IS_DARK_MODE] ?: true,
-            selectedWallpaperId = prefs[Keys.SELECTED_WALLPAPER_ID] ?: "preset:forest",
+            frostedGlassEnabled = prefs[Keys.FROSTED_GLASS_ENABLED] ?: true,
+            glassBackdropMode = GlassBackdropMode.fromKey(prefs[Keys.GLASS_BACKDROP_MODE]),
+            selectedWallpaperId = prefs[Keys.SELECTED_WALLPAPER_ID] ?: "preset:prism_waves",
             sfxEnabled = prefs[Keys.SFX_ENABLED] ?: true,
             hapticsEnabled = prefs[Keys.HAPTICS_ENABLED] ?: true,
             highRefreshRateEnabled = prefs[Keys.HIGH_REFRESH_ENABLED] ?: true,
@@ -81,6 +99,14 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setDarkMode(dark: Boolean) {
         context.browserDataStore.edit { it[Keys.IS_DARK_MODE] = dark }
+    }
+
+    suspend fun setFrostedGlassEnabled(enabled: Boolean) {
+        context.browserDataStore.edit { it[Keys.FROSTED_GLASS_ENABLED] = enabled }
+    }
+
+    suspend fun setGlassBackdropMode(mode: GlassBackdropMode) {
+        context.browserDataStore.edit { it[Keys.GLASS_BACKDROP_MODE] = mode.storageKey }
     }
 
     suspend fun setSelectedWallpaper(wallpaperId: String) {

@@ -27,6 +27,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication"
         android:usesCleartextTraffic="true">
+        <meta-data
+            android:name="android.webkit.WebView.MetricsOptOut"
+            android:value="true" />
         <activity
             android:name=".MainActivity"
             android:clearTaskOnLaunch="true"

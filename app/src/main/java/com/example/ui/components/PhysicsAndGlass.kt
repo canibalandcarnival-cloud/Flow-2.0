@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawOutline
@@ -59,6 +60,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import com.example.data.GlassBackdropMode
 import com.example.ui.theme.LocalGlassStyle
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -66,18 +68,29 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
- * Shared live backdrop state enabling zero-recursion spatial frosted glass:
- * - [wallpaperBlurredLayer]: Hardware-blurred GraphicsLayer of the untinted wallpaper (for cards inside scroll views)
- * - [sceneBlurredLayer]: Hardware-blurred GraphicsLayer of the full scene (wallpaper + scrolling content/pages, for floating chrome & overlays)
- * - [fallbackBlurredBitmap]: StackBlurred ImageBitmap for seamless blur on API < 31
+ * Shared live backdrop state enabling zero-recursion spatial frosted glass across Start Page,
+ * live WebView browsing, floating chrome bars, and modal sheets:
+ * - [wallpaperBlurredLayer]: Hardware-blurred GraphicsLayer for inner cards (untinted wallpaper on Start Page; settled webpage backdrop on sites)
+ * - [sceneBlurredLayer]: Hardware-blurred GraphicsLayer of the full scene (wallpaper + Hub content on Start Page; settled webpage backdrop on sites)
+ * - [fallbackBlurredBitmap]: StackBlurred ImageBitmap for scene backdrop on API < 31 / JVM tests
+ * - [fallbackCardBlurredBitmap]: StackBlurred ImageBitmap for card backdrop on API < 31 / JVM tests
+ * - [backdropMode]: Active glassmorphism optical backdrop mode
  */
 @Immutable
 data class SpatialBackdropState(
     val wallpaperBlurredLayer: GraphicsLayer? = null,
     val sceneBlurredLayer: GraphicsLayer? = null,
     val fallbackBlurredBitmap: ImageBitmap? = null,
+    val fallbackCardBlurredBitmap: ImageBitmap? = null,
+    val backdropMode: GlassBackdropMode = GlassBackdropMode.PRISM_AURA,
     val rootSize: IntSize = IntSize.Zero
-)
+) {
+    val hasActiveBackdrop: Boolean
+        get() = wallpaperBlurredLayer != null ||
+            sceneBlurredLayer != null ||
+            fallbackBlurredBitmap != null ||
+            fallbackCardBlurredBitmap != null
+}
 
 val LocalSpatialBackdrop = staticCompositionLocalOf { SpatialBackdropState() }
 
@@ -97,7 +110,9 @@ private class GlassGeometryCache {
     var cachedOutline: Outline? = null
     val clipPath: Path = Path()
     var sheenBrush: Brush? = null
+    var counterSheenBrush: Brush? = null
     var rimBrush: Brush? = null
+    val lightFieldCache: SpatialLightFieldCache = SpatialLightFieldCache()
 }
 
 /**
@@ -132,16 +147,16 @@ fun FrostedGlassBox(
     Box(
         contentAlignment = contentAlignment,
         modifier = modifier
-            .onGloballyPositioned { coordsRef.value = it }
+            .then(
+                if (style.isFrostedGlassEnabled) {
+                    Modifier.onGloballyPositioned { coordsRef.value = it }
+                } else {
+                    Modifier
+                }
+            )
             .clip(shape)
             .drawBehind {
-                val coords = coordsRef.value
-                val posInRoot = if (coords != null && coords.isAttached) {
-                    coords.positionInRoot()
-                } else {
-                    Offset.Zero
-                }
-
+                if (size.width <= 0f || size.height <= 0f) return@drawBehind
                 if (geometryCache.cachedSize != size ||
                     geometryCache.cachedLayoutDirection != layoutDirection ||
                     geometryCache.cachedOutline == null
@@ -159,7 +174,15 @@ fun FrostedGlassBox(
                     geometryCache.sheenBrush = Brush.verticalGradient(
                         colors = listOf(style.topSheen, Color.Transparent),
                         startY = 0f,
-                        endY = (size.height * 0.55f).coerceAtLeast(1f)
+                        endY = (size.height * 0.58f).coerceAtLeast(1f)
+                    )
+                    geometryCache.counterSheenBrush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            style.topSheen.copy(alpha = style.topSheen.alpha * 0.42f)
+                        ),
+                        start = Offset(size.width * 0.35f, size.height * 0.55f),
+                        end = Offset(size.width.coerceAtLeast(1f), size.height.coerceAtLeast(1f))
                     )
                     geometryCache.rimBrush = Brush.linearGradient(
                         colors = listOf(style.rimTopLeft, style.rimBottomRight),
@@ -169,31 +192,70 @@ fun FrostedGlassBox(
                 }
 
                 val outline = geometryCache.cachedOutline ?: return@drawBehind
+
+                if (!style.isFrostedGlassEnabled) {
+                    // Frosted Glass OFF: Crisp 100% opaque monochrome surface + hairline border
+                    val solidFill = when (elevation) {
+                        GlassElevation.CARD -> style.solidCardSurface
+                        GlassElevation.FLOATING_BAR -> style.solidBarSurface
+                        GlassElevation.MODAL_OVERLAY -> style.solidOverlaySurface
+                    }
+                    clipPath(geometryCache.clipPath) {
+                        drawRect(color = solidFill)
+                    }
+                    if (shape != RectangleShape) {
+                        val strokeWidthPx = 1.dp.toPx()
+                        drawOutline(
+                            outline = outline,
+                            color = style.solidBorderColor,
+                            style = Stroke(width = strokeWidthPx)
+                        )
+                    }
+                    return@drawBehind
+                }
+
+                val coords = coordsRef.value
+                val posInRoot = if (coords != null && coords.isAttached) {
+                    coords.positionInRoot()
+                } else {
+                    Offset.Zero
+                }
+
                 val sheen = geometryCache.sheenBrush
+                val counterSheen = geometryCache.counterSheenBrush
                 val rim = geometryCache.rimBrush
 
                 clipPath(geometryCache.clipPath) {
                     val activeLayer = if (useLiveSceneBackdrop) {
                         backdrop.sceneBlurredLayer ?: backdrop.wallpaperBlurredLayer
                     } else {
-                        backdrop.wallpaperBlurredLayer
+                        backdrop.wallpaperBlurredLayer ?: backdrop.sceneBlurredLayer
+                    }
+                    val activeFallbackBmp = if (useLiveSceneBackdrop) {
+                        backdrop.fallbackBlurredBitmap ?: backdrop.fallbackCardBlurredBitmap
+                    } else {
+                        backdrop.fallbackCardBlurredBitmap ?: backdrop.fallbackBlurredBitmap
                     }
 
                     var hasSampledBackdrop = false
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && activeLayer != null) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        activeLayer != null &&
+                        activeLayer.size.width > 0 &&
+                        activeLayer.size.height > 0
+                    ) {
                         hasSampledBackdrop = true
                         translate(left = -posInRoot.x, top = -posInRoot.y) {
                             drawLayer(activeLayer)
                         }
-                    } else if (backdrop.fallbackBlurredBitmap != null &&
+                    } else if (activeFallbackBmp != null &&
                         backdrop.rootSize.width > 0 &&
                         backdrop.rootSize.height > 0
                     ) {
                         hasSampledBackdrop = true
-                        val bmp = backdrop.fallbackBlurredBitmap
+                        val bmp = activeFallbackBmp
                         val rootW = backdrop.rootSize.width
                         val rootH = backdrop.rootSize.height
-                        // Center-crop scale calculation matching wallpaper display
+                        // Center-crop scale calculation matching viewport display
                         val scale = maxOf(
                             rootW.toFloat() / bmp.width.coerceAtLeast(1),
                             rootH.toFloat() / bmp.height.coerceAtLeast(1)
@@ -209,17 +271,30 @@ fun FrostedGlassBox(
                         )
                     }
 
-                    // Strict Monochrome Frosted Glass Tint (Black in Dark Mode, White in Light Mode)
+                    // Spatial glassmorphism light-field backdrop anchored in viewport coordinates
+                    geometryCache.lightFieldCache.drawInScreenSpace(
+                        scope = this,
+                        posInRoot = posInRoot,
+                        rootSize = backdrop.rootSize,
+                        mode = backdrop.backdropMode,
+                        isDark = style.isDark,
+                        hasSampledBackdrop = hasSampledBackdrop
+                    )
+
+                    // Monochrome Frosted Glass Tint (Black in Dark Mode, White in Light Mode)
                     val effectiveTintAlpha = if (hasSampledBackdrop) {
                         tintAlpha
                     } else {
-                        (tintAlpha + 0.14f).coerceAtMost(0.94f)
+                        (tintAlpha + 0.08f).coerceAtMost(0.88f)
                     }
                     drawRect(color = style.glassBaseColor.copy(alpha = effectiveTintAlpha))
 
-                    // Subtle top optical refraction sheen
+                    // Dual optical refraction sheen (top specular + subtle bottom-right internal reflection)
                     if (sheen != null) {
                         drawRect(brush = sheen)
+                    }
+                    if (counterSheen != null) {
+                        drawRect(brush = counterSheen)
                     }
                 }
 
@@ -247,6 +322,15 @@ fun configureBlurLayer(layer: GraphicsLayer, blurRadiusPx: Float) {
             radiusY = blurRadiusPx,
             edgeTreatment = TileMode.Clamp
         )
+    }
+}
+
+/**
+ * Clears hardware RenderEffect blur from a GraphicsLayer when Frosted Glass is disabled.
+ */
+fun clearBlurLayer(layer: GraphicsLayer) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        layer.renderEffect = null
     }
 }
 
