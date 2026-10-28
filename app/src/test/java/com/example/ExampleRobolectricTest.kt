@@ -138,4 +138,34 @@ class ExampleRobolectricTest {
                 collectJob.cancel()
             }
         }
+
+    @Test
+    fun `browser typography uses multi-weight SF Pro across all styles and resources`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val fontResIds = listOf(
+            R.font.inter_300,
+            R.font.inter_400,
+            R.font.inter_500,
+            R.font.inter_600,
+            R.font.inter_700,
+            R.font.inter_800,
+            R.font.inter_900
+        )
+        for (resId in fontResIds) {
+            context.resources.openRawResource(resId).use { stream ->
+                assertTrue("Bundled SF Pro font stream must be non-empty", stream.available() > 1024)
+            }
+        }
+
+        val typography = com.example.ui.theme.BrowserTypography
+        val sfPro = com.example.ui.theme.SfProFontFamily
+        assertEquals(sfPro, typography.displayLarge.fontFamily)
+        assertEquals(sfPro, typography.headlineMedium.fontFamily)
+        assertEquals(sfPro, typography.titleLarge.fontFamily)
+        assertEquals(sfPro, typography.titleMedium.fontFamily)
+        assertEquals(sfPro, typography.bodyLarge.fontFamily)
+        assertEquals(sfPro, typography.bodyMedium.fontFamily)
+        assertEquals(sfPro, typography.labelLarge.fontFamily)
+        assertEquals(sfPro, typography.labelMedium.fontFamily)
+    }
 }

@@ -85,6 +85,13 @@ object GpuRenderController {
         }
 
         try {
+            webView.settings.standardFontFamily = "SF Pro Text"
+            webView.settings.sansSerifFontFamily = "SF Pro Text"
+        } catch (_: Throwable) {
+            // Guard against stubbed or restricted WebSettings implementations
+        }
+
+        try {
             webView.settings.setRenderPriority(
                 if (forceGpuRendering || enableGpuRasterization) {
                     WebSettings.RenderPriority.HIGH
@@ -98,6 +105,38 @@ object GpuRenderController {
     }
 
     /**
+     * Injects local multi-weight SF Pro (`SF Pro Text`, `SF Pro Display`, `SF Pro`, `-apple-system`,
+     * `BlinkMacSystemFont`) `@font-face` declarations into web pages so web typography renders in
+     * crisp SF Pro without breaking custom icon fonts or monospace code blocks.
+     */
+    fun injectPageSfProTypography(webView: WebView) {
+        val js = """
+            (function() {
+                try {
+                    if (!document || !document.head || document.getElementById('__glass_sf_pro_font')) return;
+                    var weights = [300, 400, 500, 600, 700, 800, 900];
+                    var families = ['SF Pro Text', 'SF Pro Display', 'SF Pro', '-apple-system', 'BlinkMacSystemFont'];
+                    var css = '';
+                    for (var f = 0; f < families.length; f++) {
+                        for (var w = 0; w < weights.length; w++) {
+                            var wt = weights[w];
+                            css += "@font-face{font-family:'" + families[f] + "';font-style:normal;font-weight:" + wt + ";font-display:swap;src:url('https://glassbrowser.font.local/sf-pro-" + wt + ".ttf') format('truetype');}";
+                        }
+                    }
+                    css += ":root,html,body,button,input,select,textarea{font-family:'SF Pro Text','SF Pro Display','SF Pro',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-font-smoothing:antialiased;}";
+                    var st = document.createElement('style');
+                    st.id = '__glass_sf_pro_font';
+                    st.textContent = css;
+                    document.head.insertBefore(st, document.head.firstChild);
+                } catch (e) {}
+            })();
+        """.trimIndent()
+        try {
+            webView.evaluateJavascript(js, null)
+        } catch (_: Throwable) {}
+    }
+
+    /**
      * Applies GPU-composited rasterization hints and safe bottom clearance to loaded web documents
      * so scrolling layers, media elements, and typography rasterize cleanly on the GPU.
      */
@@ -105,6 +144,7 @@ object GpuRenderController {
         webView: WebView,
         enableGpuRasterization: Boolean
     ) {
+        injectPageSfProTypography(webView)
         val js = if (enableGpuRasterization) {
             """
             (function() {

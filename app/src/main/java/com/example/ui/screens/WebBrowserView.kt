@@ -12,6 +12,7 @@ import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -41,6 +42,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.R
 import com.example.core.DeviceOptimizationManager
 import com.example.core.GpuRenderController
 import com.example.ui.BrowserViewModel
@@ -254,6 +256,8 @@ fun WebBrowserView(
                         mediaPlaybackRequiresUserGesture = false
                         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                         cacheMode = if (isPrivate) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
+                        standardFontFamily = "SF Pro Text"
+                        sansSerifFontFamily = "SF Pro Text"
                     }
 
                     addJavascriptInterface(
@@ -318,6 +322,41 @@ fun WebBrowserView(
                     }
 
                     webViewClient = object : WebViewClient() {
+                        override fun shouldInterceptRequest(
+                            view: WebView?,
+                            request: WebResourceRequest?
+                        ): WebResourceResponse? {
+                            val reqUrl = request?.url
+                            if (reqUrl != null && reqUrl.host == "glassbrowser.font.local") {
+                                val fontResId = when (reqUrl.path) {
+                                    "/sf-pro-300.ttf" -> R.font.inter_300
+                                    "/sf-pro-400.ttf" -> R.font.inter_400
+                                    "/sf-pro-500.ttf" -> R.font.inter_500
+                                    "/sf-pro-600.ttf" -> R.font.inter_600
+                                    "/sf-pro-700.ttf" -> R.font.inter_700
+                                    "/sf-pro-800.ttf" -> R.font.inter_800
+                                    "/sf-pro-900.ttf" -> R.font.inter_900
+                                    else -> R.font.inter_400
+                                }
+                                return try {
+                                    WebResourceResponse(
+                                        "font/ttf",
+                                        null,
+                                        200,
+                                        "OK",
+                                        mapOf(
+                                            "Access-Control-Allow-Origin" to "*",
+                                            "Cache-Control" to "public, max-age=31536000, immutable"
+                                        ),
+                                        ctx.resources.openRawResource(fontResId)
+                                    )
+                                } catch (_: Throwable) {
+                                    null
+                                }
+                            }
+                            return super.shouldInterceptRequest(view, request)
+                        }
+
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,
                             request: WebResourceRequest?
@@ -358,7 +397,8 @@ fun WebBrowserView(
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
                             super.onProgressChanged(view, newProgress)
                             onProgressLatest(newProgress)
-                            if (view != null && (newProgress == 45 || newProgress == 80 || newProgress == 100)) {
+                            if (view != null && (newProgress == 35 || newProgress == 65 || newProgress == 100)) {
+                                GpuRenderController.injectPageSfProTypography(view)
                                 injectVideoPlaybackObserver(view)
                             }
                         }
