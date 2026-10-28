@@ -342,6 +342,7 @@ fun GlassBrowserApp(
                                 onPageStarted = viewModel::onWebPageStarted,
                                 onProgressChanged = viewModel::onWebProgressChanged,
                                 onPageFinished = viewModel::onWebPageFinished,
+                                onVideoPlaybackChanged = viewModel::onWebVideoPlaybackChanged,
                                 onSnapshotCaptured = viewModel::updateTabSnapshot,
                                 onEdgeBounce = viewModel.feedback::onEdgeBounce,
                                 modifier = Modifier.fillMaxSize()
@@ -421,19 +422,24 @@ fun GlassBrowserApp(
                 }
 
                 // Bottom Floating Browser Glass Bar (Back + Search/URL Pill + Tabs Button)
+                // Smoothly slides downward off-screen whenever a video is playing on the active site!
+                val isBottomBarVisible = !uiState.isTabSwitcherOpen &&
+                    !uiState.isAddressOverlayOpen &&
+                    !(uiState.isViewingWebPage && uiState.isVideoPlaying)
+
                 AnimatedVisibility(
-                    visible = !uiState.isTabSwitcherOpen && !uiState.isAddressOverlayOpen,
-                    enter = fadeIn(spring(stiffness = 400f)) +
+                    visible = isBottomBarVisible,
+                    enter = fadeIn(animationSpec = spring(stiffness = 380f)) +
                         slideInVertically(
-                            initialOffsetY = { it },
-                            animationSpec = spring(dampingRatio = 0.66f, stiffness = 360f)
+                            initialOffsetY = { fullHeight -> (fullHeight * 1.35f).toInt() },
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 340f)
                         ),
-                    exit = fadeOut(spring(stiffness = 480f)) +
-                        slideOutVertically(targetOffsetY = { it }),
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(horizontal = 18.dp, vertical = 12.dp)
+                    exit = fadeOut(animationSpec = spring(stiffness = 360f)) +
+                        slideOutVertically(
+                            targetOffsetY = { fullHeight -> (fullHeight * 1.35f).toInt() },
+                            animationSpec = spring(dampingRatio = 0.80f, stiffness = 300f)
+                        ),
+                    modifier = Modifier.align(Alignment.BottomCenter)
                 ) {
                     val canGoBack = uiState.isViewingWebPage ||
                         uiState.activeSection != TopHubSection.START_PAGE
@@ -452,7 +458,10 @@ fun GlassBrowserApp(
                                 viewModel.openAddressOverlay()
                             }
                         },
-                        onTabsClick = viewModel::openTabSwitcher
+                        onTabsClick = viewModel::openTabSwitcher,
+                        modifier = Modifier
+                            .navigationBarsPadding()
+                            .padding(horizontal = 18.dp, vertical = 12.dp)
                     )
                 }
 

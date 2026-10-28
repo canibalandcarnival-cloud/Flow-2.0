@@ -3,14 +3,21 @@ package com.example.ui.screens
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Handler
+import android.os.Looper
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import androidx.activity.compose.BackHandler
+import androidx.annotation.Keep
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -38,15 +45,31 @@ import com.example.core.DeviceOptimizationManager
 import com.example.core.GpuRenderController
 import com.example.ui.BrowserViewModel
 import com.example.ui.theme.LocalGlassStyle
+import com.example.ui.theme.PureBlack
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.pow
 
+@Keep
+private class WebVideoPlaybackBridge(
+    private val mainHandler: Handler,
+    private val onPlaybackStateChanged: (Boolean) -> Unit
+) {
+    @Keep
+    @JavascriptInterface
+    fun onVideoState(playing: Boolean) {
+        mainHandler.post {
+            onPlaybackStateChanged(playing)
+        }
+    }
+}
+
 /**
  * Full-bleed live WebView surface (extending edge-to-edge to the bottom with no wallpaper behind or below),
  * supporting dynamic Force GPU Rendering, Enable GPU Rasterization, Disable Hardware Overlays,
- * lifecycle-aware CPU/GPU power management, device-tuned snapshot capture, and elastic rubber-band overscroll.
+ * inline + fullscreen HTML5 video playback detection, lifecycle-aware CPU/GPU power management,
+ * device-tuned snapshot capture, and elastic rubber-band overscroll.
  */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
@@ -70,6 +93,7 @@ fun WebBrowserView(
         canGoForward: Boolean,
         isPrivate: Boolean
     ) -> Unit,
+    onVideoPlaybackChanged: (tabId: Long, isPlaying: Boolean) -> Unit,
     onSnapshotCaptured: (tabId: Long, bitmap: Bitmap) -> Unit,
     onEdgeBounce: (Float) -> Unit,
     modifier: Modifier = Modifier
@@ -80,6 +104,12 @@ fun WebBrowserView(
     val rubberY = remember { Animatable(0f) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
+    // Track both inline HTML5 <video> playback and WebChromeClient fullscreen video view
+    var isInlineVideoPlaying by remember(tabId) { mutableStateOf(false) }
+    var customVideoView by remember { mutableStateOf<View?>(null) }
+    var customVideoCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    val effectiveVideoPlaying = isInlineVideoPlaying || (customVideoView != null)
+
     val currentTabId by rememberUpdatedState(tabId)
     val currentPrivate by rememberUpdatedState(isPrivate)
     val currentGpuRaster by rememberUpdatedState(enableGpuRasterization)
@@ -87,8 +117,23 @@ fun WebBrowserView(
     val onStartedLatest by rememberUpdatedState(onPageStarted)
     val onProgressLatest by rememberUpdatedState(onProgressChanged)
     val onFinishedLatest by rememberUpdatedState(onPageFinished)
+    val onVideoPlaybackLatest by rememberUpdatedState(onVideoPlaybackChanged)
     val onSnapshotLatest by rememberUpdatedState(onSnapshotCaptured)
     val onBounceLatest by rememberUpdatedState(onEdgeBounce)
+
+    // Notify ViewModel whenever inline or fullscreen video starts/stops so the bottom search bar slides down/up
+    LaunchedEffect(currentTabId, effectiveVideoPlaying) {
+        onVideoPlaybackLatest(currentTabId, effectiveVideoPlaying)
+    }
+
+    // Exit fullscreen video cleanly on system Back gesture without leaving the page
+    BackHandler(enabled = customVideoView != null) {
+        try {
+            customVideoCallback?.onCustomViewHidden()
+        } catch (_: Throwable) {}
+        customVideoView = null
+        customVideoCallback = null
+    }
 
     // Lifecycle-aware pause/resume so inactive/backgrounded sessions conserve CPU & battery on all devices
     DisposableEffect(lifecycleOwner, webViewRef) {
@@ -100,6 +145,7 @@ fun WebBrowserView(
                     wv.resumeTimers()
                 }
                 Lifecycle.Event.ON_PAUSE -> {
+                    isInlineVideoPlaying = false
                     wv.onPause()
                 }
                 else -> Unit
@@ -108,6 +154,7 @@ fun WebBrowserView(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            onVideoPlaybackLatest(currentTabId, false)
         }
     }
 
@@ -118,9 +165,13 @@ fun WebBrowserView(
         when (cmd) {
             BrowserViewModel.WebCommand.GoBack -> if (wv.canGoBack()) wv.goBack()
             BrowserViewModel.WebCommand.GoForward -> if (wv.canGoForward()) wv.goForward()
-            BrowserViewModel.WebCommand.Reload -> wv.reload()
+            BrowserViewModel.WebCommand.Reload -> {
+                isInlineVideoPlaying = false
+                wv.reload()
+            }
             is BrowserViewModel.WebCommand.LoadUrl -> {
                 if (wv.url != cmd.url) {
+                    isInlineVideoPlaying = false
                     wv.loadUrl(cmd.url)
                 }
             }
@@ -205,6 +256,13 @@ fun WebBrowserView(
                         cacheMode = if (isPrivate) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
                     }
 
+                    addJavascriptInterface(
+                        WebVideoPlaybackBridge(Handler(Looper.getMainLooper())) { playing ->
+                            isInlineVideoPlaying = playing
+                        },
+                        "GlassVideoBridge"
+                    )
+
                     // Rubber-band spring touch handler at WebView top & bottom limits + snapshot refresh
                     var lastTouchY = 0f
                     var isDraggingEdge = false
@@ -267,6 +325,7 @@ fun WebBrowserView(
 
                         override fun onPageStarted(view: WebView?, startedUrl: String?, favicon: Bitmap?) {
                             super.onPageStarted(view, startedUrl, favicon)
+                            isInlineVideoPlaying = false
                             if (!startedUrl.isNullOrBlank()) {
                                 onStartedLatest(currentTabId, startedUrl)
                             }
@@ -280,6 +339,7 @@ fun WebBrowserView(
                                 webView = wv,
                                 enableGpuRasterization = currentGpuRaster
                             )
+                            injectVideoPlaybackObserver(wv)
                             onFinishedLatest(
                                 currentTabId,
                                 finalUrl,
@@ -298,6 +358,30 @@ fun WebBrowserView(
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
                             super.onProgressChanged(view, newProgress)
                             onProgressLatest(newProgress)
+                            if (view != null && (newProgress == 45 || newProgress == 80 || newProgress == 100)) {
+                                injectVideoPlaybackObserver(view)
+                            }
+                        }
+
+                        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                            if (view == null) {
+                                callback?.onCustomViewHidden()
+                                return
+                            }
+                            if (customVideoView != null) {
+                                callback?.onCustomViewHidden()
+                                return
+                            }
+                            customVideoView = view
+                            customVideoCallback = callback
+                        }
+
+                        override fun onHideCustomView() {
+                            try {
+                                customVideoCallback?.onCustomViewHidden()
+                            } catch (_: Throwable) {}
+                            customVideoView = null
+                            customVideoCallback = null
                         }
                     }
 
@@ -316,11 +400,149 @@ fun WebBrowserView(
                     enableGpuRasterization = enableGpuRasterization
                 )
                 if (url.isNotBlank() && wv.url != url && wv.originalUrl != url) {
+                    isInlineVideoPlaying = false
                     wv.loadUrl(url)
                 }
             }
         )
+
+        // Fullscreen HTML5 Video surface when a webpage player enters fullscreen
+        val activeFullscreenVideo = customVideoView
+        if (activeFullscreenVideo != null) {
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(PureBlack)
+                    .testTag("fullscreen_video_container"),
+                factory = { ctx ->
+                    FrameLayout(ctx).apply {
+                        setBackgroundColor(android.graphics.Color.BLACK)
+                    }
+                },
+                update = { container ->
+                    if (activeFullscreenVideo.parent !== container) {
+                        (activeFullscreenVideo.parent as? ViewGroup)?.removeView(activeFullscreenVideo)
+                        container.removeAllViews()
+                        container.addView(
+                            activeFullscreenVideo,
+                            FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        )
+                    }
+                }
+            )
+        }
     }
+}
+
+/**
+ * Installs a lightweight, zero-DOM-scan HTML5 video & fullscreen playback observer in the page.
+ * Uses native `getElementsByTagName('video')` + Shadow DOM `event.composedPath()` capture events
+ * to detect inline and fullscreen video playback immediately and notify [WebVideoPlaybackBridge].
+ */
+private fun injectVideoPlaybackObserver(webView: WebView) {
+    val script = """
+        (function() {
+            try {
+                if (window.__glassVideoHooked) {
+                    if (window.__glassCheckVideos) window.__glassCheckVideos();
+                    return;
+                }
+                window.__glassVideoHooked = true;
+                var trackedVideos = new Set();
+                var lastReported = null;
+
+                function recordTarget(ev) {
+                    try {
+                        var path = ev && ev.composedPath ? ev.composedPath() : null;
+                        var node = (path && path.length > 0) ? path[0] : (ev ? ev.target : null);
+                        if (node && node.tagName === 'VIDEO') {
+                            trackedVideos.add(node);
+                        }
+                    } catch (e) {}
+                }
+
+                function isVisiblePlayingVideo(v) {
+                    if (!v || v.paused || v.ended || v.readyState < 2) return false;
+                    var rect = v.getBoundingClientRect();
+                    if (rect.width < 80 || rect.height < 60) return false;
+                    var vw = window.innerWidth || document.documentElement.clientWidth || 360;
+                    var vh = window.innerHeight || document.documentElement.clientHeight || 640;
+                    return rect.bottom > 24 && rect.top < (vh - 24) && rect.right > 16 && rect.left < (vw - 16);
+                }
+
+                function checkVideos() {
+                    try {
+                        var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+                        var playing = !!fsEl;
+
+                        if (!playing) {
+                            var domVideos = document.getElementsByTagName('video');
+                            for (var i = 0; i < domVideos.length; i++) {
+                                trackedVideos.add(domVideos[i]);
+                            }
+                            var frames = document.getElementsByTagName('iframe');
+                            for (var f = 0; f < frames.length; f++) {
+                                try {
+                                    var fDoc = frames[f].contentDocument || (frames[f].contentWindow && frames[f].contentWindow.document);
+                                    if (fDoc) {
+                                        var fVids = fDoc.getElementsByTagName('video');
+                                        for (var fv = 0; fv < fVids.length; fv++) {
+                                            trackedVideos.add(fVids[fv]);
+                                        }
+                                    }
+                                } catch (frameErr) {}
+                            }
+
+                            trackedVideos.forEach(function(v) {
+                                if (!v.isConnected) {
+                                    trackedVideos.delete(v);
+                                } else if (isVisiblePlayingVideo(v)) {
+                                    playing = true;
+                                }
+                            });
+                        }
+
+                        window.__glassVideoActivelyPlaying = playing;
+                        if (document && document.body) {
+                            document.body.style.paddingBottom = playing ? '0px' : '88px';
+                        }
+
+                        if (playing !== lastReported) {
+                            lastReported = playing;
+                            if (window.GlassVideoBridge && window.GlassVideoBridge.onVideoState) {
+                                window.GlassVideoBridge.onVideoState(playing);
+                            }
+                        }
+                    } catch (err) {}
+                }
+
+                window.__glassCheckVideos = checkVideos;
+
+                var mediaEvents = [
+                    'play', 'playing', 'pause', 'ended', 'emptied', 'abort',
+                    'suspend', 'loadeddata', 'timeupdate',
+                    'fullscreenchange', 'webkitfullscreenchange',
+                    'webkitbeginfullscreen', 'webkitendfullscreen'
+                ];
+                for (var idx = 0; idx < mediaEvents.length; idx++) {
+                    window.addEventListener(mediaEvents[idx], function(ev) {
+                        recordTarget(ev);
+                        checkVideos();
+                    }, true);
+                }
+                window.addEventListener('scroll', checkVideos, { passive: true, capture: true });
+                window.addEventListener('resize', checkVideos, { passive: true });
+                setInterval(checkVideos, 650);
+                checkVideos();
+            } catch (outerErr) {}
+        })();
+    """.trimIndent()
+    try {
+        webView.evaluateJavascript(script, null)
+    } catch (_: Throwable) {}
 }
 
 private fun captureWebViewThumbnail(

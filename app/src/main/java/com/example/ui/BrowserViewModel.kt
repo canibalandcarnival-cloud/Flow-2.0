@@ -65,6 +65,7 @@ data class BrowserUiState(
     val tabSearchQuery: String = "",
     val isTabSearchActive: Boolean = false,
     val isLoadingWebPage: Boolean = false,
+    val isVideoPlaying: Boolean = false,
     val webLoadProgress: Float = 0f,
     val canWebGoBack: Boolean = false,
     val canWebGoForward: Boolean = false,
@@ -131,6 +132,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val tabSearchQuery: String = "",
         val isTabSearchActive: Boolean = false,
         val isLoadingWebPage: Boolean = false,
+        val isVideoPlaying: Boolean = false,
         val webLoadProgress: Float = 0f,
         val canWebGoBack: Boolean = false,
         val canWebGoForward: Boolean = false,
@@ -195,6 +197,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             tabSearchQuery = transient.tabSearchQuery,
             isTabSearchActive = transient.isTabSearchActive,
             isLoadingWebPage = transient.isLoadingWebPage,
+            isVideoPlaying = transient.isVideoPlaying,
             webLoadProgress = transient.webLoadProgress,
             canWebGoBack = transient.canWebGoBack,
             canWebGoForward = transient.canWebGoForward,
@@ -300,7 +303,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         transientState.update {
             it.copy(
                 isAddressOverlayOpen = false,
-                isTabSwitcherOpen = false
+                isTabSwitcherOpen = false,
+                isVideoPlaying = false
             )
         }
         viewModelScope.launch {
@@ -327,6 +331,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     canWebGoBack = false,
                     canWebGoForward = false,
                     isLoadingWebPage = false,
+                    isVideoPlaying = false,
                     webLoadProgress = 0f
                 )
             }
@@ -342,6 +347,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 isTabSwitcherOpen = false,
                 isAddressOverlayOpen = false,
                 isSettingsSheetOpen = false,
+                isVideoPlaying = false,
                 activeSection = TopHubSection.START_PAGE
             )
         }
@@ -387,9 +393,25 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun onWebPageStarted(tabId: Long, url: String) {
-        transientState.update { it.copy(isLoadingWebPage = true, webLoadProgress = 0.12f) }
+        transientState.update {
+            it.copy(
+                isLoadingWebPage = true,
+                isVideoPlaying = false,
+                webLoadProgress = 0.12f
+            )
+        }
         viewModelScope.launch {
             repository.updateTabNavigation(tabId, url, null)
+        }
+    }
+
+    fun onWebVideoPlaybackChanged(tabId: Long, isPlaying: Boolean) {
+        val activeId = uiState.value.activeTab?.id
+        if (activeId == null || tabId == activeId || !isPlaying) {
+            transientState.update { current ->
+                if (current.isVideoPlaying == isPlaying) current
+                else current.copy(isVideoPlaying = isPlaying)
+            }
         }
     }
 
@@ -467,6 +489,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             transientState.update {
                 it.copy(
                     isTabSwitcherOpen = false,
+                    isVideoPlaying = false,
                     activeTabGroupFilter = null,
                     activeSection = TopHubSection.START_PAGE
                 )
@@ -481,6 +504,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             transientState.update {
                 it.copy(
                     isTabSwitcherOpen = false,
+                    isVideoPlaying = false,
                     activeTabGroupFilter = null
                 )
             }

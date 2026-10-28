@@ -109,7 +109,7 @@ object GpuRenderController {
             """
             (function() {
                 try {
-                    if (document && document.body) {
+                    if (document && document.body && !window.__glassVideoActivelyPlaying) {
                         document.body.style.paddingBottom = '88px';
                     }
                     if (document && document.head && !document.getElementById('__glass_gpu_raster')) {
@@ -125,7 +125,7 @@ object GpuRenderController {
             """
             (function() {
                 try {
-                    if (document && document.body) {
+                    if (document && document.body && !window.__glassVideoActivelyPlaying) {
                         document.body.style.paddingBottom = '88px';
                     }
                     var existing = document && document.getElementById('__glass_gpu_raster');

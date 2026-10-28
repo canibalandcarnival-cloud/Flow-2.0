@@ -10,6 +10,7 @@ import com.example.core.DeviceOptimizationManager
 import com.example.core.GpuRenderController
 import com.example.core.WallpaperLuminanceAnalyzer
 import com.example.data.BrowserRepository
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -102,4 +103,39 @@ class ExampleRobolectricTest {
         )
         assertEquals(android.view.View.LAYER_TYPE_NONE, webView.layerType)
     }
+
+    @Test
+    fun `video playback state hides bottom search bar and restores on pause`() =
+        kotlinx.coroutines.runBlocking {
+            val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+            val vm = com.example.ui.BrowserViewModel(app)
+
+            val collectJob = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+                vm.uiState.collect {}
+            }
+            try {
+                // Wait for initial database & DataStore streams to seed and emit
+                var attempts = 0
+                while (!vm.uiState.value.isReady && attempts < 50) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(40)
+                    attempts++
+                }
+
+                val activeTabId = vm.uiState.value.activeTab?.id ?: -1L
+                vm.onWebVideoPlaybackChanged(tabId = activeTabId, isPlaying = true)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(30)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertTrue(vm.uiState.value.isVideoPlaying)
+
+                vm.onWebVideoPlaybackChanged(tabId = activeTabId, isPlaying = false)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(30)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertFalse(vm.uiState.value.isVideoPlaying)
+            } finally {
+                collectJob.cancel()
+            }
+        }
 }
