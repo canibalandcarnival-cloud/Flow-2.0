@@ -26,7 +26,11 @@ data class BrowserSettingsState(
     val disableHardwareOverlays: Boolean = true,
     val immersiveOsMode: Boolean = true,
     val activeTabId: Long = -1L,
-    val isPrivateMode: Boolean = false
+    val isPrivateMode: Boolean = false,
+    val isGoogleSignedIn: Boolean = false,
+    val googleAccountEmail: String = "",
+    val googleAccountName: String = "",
+    val googleAccountAvatarUrl: String = ""
 )
 
 class BrowserPreferences(private val context: Context) {
@@ -43,6 +47,10 @@ class BrowserPreferences(private val context: Context) {
         val IMMERSIVE_OS_MODE = booleanPreferencesKey("immersive_os_mode")
         val ACTIVE_TAB_ID = longPreferencesKey("active_tab_id")
         val IS_PRIVATE_MODE = booleanPreferencesKey("is_private_mode")
+        val IS_GOOGLE_SIGNED_IN = booleanPreferencesKey("is_google_signed_in")
+        val GOOGLE_ACCOUNT_EMAIL = stringPreferencesKey("google_account_email")
+        val GOOGLE_ACCOUNT_NAME = stringPreferencesKey("google_account_name")
+        val GOOGLE_ACCOUNT_AVATAR_URL = stringPreferencesKey("google_account_avatar_url")
     }
 
     val settingsFlow: Flow<BrowserSettingsState> = context.browserDataStore.data.map { prefs ->
@@ -57,7 +65,11 @@ class BrowserPreferences(private val context: Context) {
             disableHardwareOverlays = prefs[Keys.DISABLE_HW_OVERLAYS] ?: true,
             immersiveOsMode = prefs[Keys.IMMERSIVE_OS_MODE] ?: true,
             activeTabId = prefs[Keys.ACTIVE_TAB_ID] ?: -1L,
-            isPrivateMode = prefs[Keys.IS_PRIVATE_MODE] ?: false
+            isPrivateMode = prefs[Keys.IS_PRIVATE_MODE] ?: false,
+            isGoogleSignedIn = prefs[Keys.IS_GOOGLE_SIGNED_IN] ?: false,
+            googleAccountEmail = prefs[Keys.GOOGLE_ACCOUNT_EMAIL] ?: "",
+            googleAccountName = prefs[Keys.GOOGLE_ACCOUNT_NAME] ?: "",
+            googleAccountAvatarUrl = prefs[Keys.GOOGLE_ACCOUNT_AVATAR_URL] ?: ""
         )
     }
 
@@ -101,6 +113,26 @@ class BrowserPreferences(private val context: Context) {
         context.browserDataStore.edit {
             it[Keys.ACTIVE_TAB_ID] = tabId
             it[Keys.IS_PRIVATE_MODE] = isPrivate
+        }
+    }
+
+    suspend fun setGoogleAccountSession(
+        signedIn: Boolean,
+        email: String = "",
+        name: String = "",
+        avatarUrl: String = ""
+    ) {
+        context.browserDataStore.edit { prefs ->
+            prefs[Keys.IS_GOOGLE_SIGNED_IN] = signedIn
+            if (!signedIn) {
+                prefs[Keys.GOOGLE_ACCOUNT_EMAIL] = ""
+                prefs[Keys.GOOGLE_ACCOUNT_NAME] = ""
+                prefs[Keys.GOOGLE_ACCOUNT_AVATAR_URL] = ""
+            } else {
+                if (email.isNotBlank()) prefs[Keys.GOOGLE_ACCOUNT_EMAIL] = email
+                if (name.isNotBlank()) prefs[Keys.GOOGLE_ACCOUNT_NAME] = name
+                if (avatarUrl.isNotBlank()) prefs[Keys.GOOGLE_ACCOUNT_AVATAR_URL] = avatarUrl
+            }
         }
     }
 }

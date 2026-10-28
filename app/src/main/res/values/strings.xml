@@ -60,4 +60,15 @@
     <string name="cd_tab_groups">Manage tab groups</string>
     <string name="cd_search_tabs">Search tabs</string>
     <string name="cd_import_wallpaper">Import custom wallpaper from device</string>
+    <string name="google_account_section_title">Google Account</string>
+    <string name="google_sign_in_title">Sign in with Google</string>
+    <string name="google_sign_in_subtitle">Use Google Search, YouTube, Gmail &amp; websites with your account logged in</string>
+    <string name="google_sign_in_button">Sign In</string>
+    <string name="google_signed_in_default_name">Google Account</string>
+    <string name="google_signed_in_active_subtitle">Signed in • Active across websites</string>
+    <string name="google_manage_account_button">Account</string>
+    <string name="google_sign_out_button">Sign Out</string>
+    <string name="google_auth_sheet_title">Google Sign-In</string>
+    <string name="google_auth_done_button">Done</string>
+    <string name="cd_close_google_sign_in">Close Google Sign-In</string>
 </resources>

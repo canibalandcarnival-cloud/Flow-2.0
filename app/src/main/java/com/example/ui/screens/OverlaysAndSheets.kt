@@ -364,6 +364,9 @@ fun WallpaperAndSettingsSheet(
     displayCapability: DisplayRefreshRateManager.DisplayCapability,
     osRoleStatus: OsShellManager.OsRoleStatus,
     onSelectDarkMode: (Boolean) -> Unit,
+    onGoogleSignInClick: () -> Unit,
+    onGoogleManageAccountClick: () -> Unit,
+    onGoogleSignOutClick: () -> Unit,
     onSelectWallpaper: (String) -> Unit,
     onImportWallpaperClick: () -> Unit,
     onDeleteCustomWallpaper: (CustomWallpaperEntity) -> Unit,
@@ -467,6 +470,16 @@ fun WallpaperAndSettingsSheet(
                             }
                         }
                     }
+                }
+
+                // 0. Google Account Login & Shared Web Session Card
+                item {
+                    GoogleAccountSettingsSection(
+                        settings = uiState.settings,
+                        onSignInClick = onGoogleSignInClick,
+                        onManageAccountClick = onGoogleManageAccountClick,
+                        onSignOutClick = onGoogleSignOutClick
+                    )
                 }
 
                 // 1. Light Mode (White UI) / Dark Mode (Black UI) Segmented Toggle

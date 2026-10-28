@@ -72,6 +72,7 @@ import com.example.ui.components.configureBlurLayer
 import com.example.ui.screens.AddressSearchOverlay
 import com.example.ui.screens.BottomBrowserGlassBar
 import com.example.ui.screens.BrowserHubContent
+import com.example.ui.screens.GoogleAccountSignInOverlay
 import com.example.ui.screens.NewTabGroupDialog
 import com.example.ui.screens.TabSwitcherOverlay
 import com.example.ui.screens.TopSegmentedGlassBar
@@ -214,6 +215,7 @@ fun GlassBrowserApp(
     // Like a true Operating System Home Shell, pressing system Back unwinds overlays/pages,
     // and at the root Home Start Page stays anchored in the OS shell instead of exiting!
     val hasInternalBackTarget = isNewGroupDialogOpen ||
+        uiState.isGoogleSignInSheetOpen ||
         uiState.isAddressOverlayOpen ||
         uiState.isSettingsSheetOpen ||
         uiState.isTabSwitcherOpen ||
@@ -343,6 +345,7 @@ fun GlassBrowserApp(
                                 onProgressChanged = viewModel::onWebProgressChanged,
                                 onPageFinished = viewModel::onWebPageFinished,
                                 onVideoPlaybackChanged = viewModel::onWebVideoPlaybackChanged,
+                                onGoogleSessionSync = viewModel::syncGoogleWebSessionFromPage,
                                 onSnapshotCaptured = viewModel::updateTabSnapshot,
                                 onEdgeBounce = viewModel.feedback::onEdgeBounce,
                                 modifier = Modifier.fillMaxSize()
@@ -425,6 +428,7 @@ fun GlassBrowserApp(
                 // Smoothly slides downward off-screen whenever a video is playing on the active site!
                 val isBottomBarVisible = !uiState.isTabSwitcherOpen &&
                     !uiState.isAddressOverlayOpen &&
+                    !uiState.isGoogleSignInSheetOpen &&
                     !(uiState.isViewingWebPage && uiState.isVideoPlaying)
 
                 AnimatedVisibility(
@@ -536,6 +540,9 @@ fun GlassBrowserApp(
                         displayCapability = displayCapability,
                         osRoleStatus = osRoleStatus,
                         onSelectDarkMode = viewModel::setDarkMode,
+                        onGoogleSignInClick = viewModel::openGoogleSignInSheet,
+                        onGoogleManageAccountClick = viewModel::openGoogleAccountManagement,
+                        onGoogleSignOutClick = viewModel::signOutGoogleAccount,
                         onSelectWallpaper = viewModel::selectWallpaper,
                         onImportWallpaperClick = {
                             photoPickerLauncher.launch(
@@ -579,6 +586,23 @@ fun GlassBrowserApp(
                         onCloseAllTabs = viewModel::closeAllCurrentModeTabs,
                         onEdgeBounce = viewModel.feedback::onEdgeBounce,
                         onDismiss = { viewModel.setSettingsSheetOpen(false) }
+                    )
+                }
+
+                // In-Browser Shared-Session Google Account Sign-In Sheet
+                AnimatedVisibility(
+                    visible = uiState.isGoogleSignInSheetOpen,
+                    enter = fadeIn(spring(stiffness = 420f)) +
+                        slideInVertically(
+                            initialOffsetY = { it / 2 },
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 360f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { it / 2 })
+                ) {
+                    GoogleAccountSignInOverlay(
+                        onSignInCompleted = viewModel::onGoogleSignInCompleted,
+                        onDismiss = viewModel::closeGoogleSignInSheet
                     )
                 }
 

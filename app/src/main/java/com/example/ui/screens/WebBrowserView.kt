@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -42,10 +43,32 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.core.DeviceOptimizationManager
+import com.example.core.GoogleWebSessionManager
 import com.example.core.GpuRenderController
+import com.example.data.BrowserRepository
 import com.example.ui.BrowserViewModel
+import com.example.ui.components.bouncyClickable
 import com.example.ui.theme.LocalGlassStyle
 import com.example.ui.theme.PureBlack
 import kotlinx.coroutines.delay
@@ -96,6 +119,7 @@ fun WebBrowserView(
         isPrivate: Boolean
     ) -> Unit,
     onVideoPlaybackChanged: (tabId: Long, isPlaying: Boolean) -> Unit,
+    onGoogleSessionSync: (isActive: Boolean, email: String, name: String, avatarUrl: String) -> Unit,
     onSnapshotCaptured: (tabId: Long, bitmap: Bitmap) -> Unit,
     onEdgeBounce: (Float) -> Unit,
     modifier: Modifier = Modifier
@@ -106,10 +130,12 @@ fun WebBrowserView(
     val rubberY = remember { Animatable(0f) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
-    // Track both inline HTML5 <video> playback and WebChromeClient fullscreen video view
+    // Track inline HTML5 <video>, WebChromeClient fullscreen video, and OAuth/federated popup windows
     var isInlineVideoPlaying by remember(tabId) { mutableStateOf(false) }
     var customVideoView by remember { mutableStateOf<View?>(null) }
     var customVideoCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    var oauthPopupWebView by remember { mutableStateOf<WebView?>(null) }
+    var oauthPopupUrl by remember { mutableStateOf("") }
     val effectiveVideoPlaying = isInlineVideoPlaying || (customVideoView != null)
 
     val currentTabId by rememberUpdatedState(tabId)
@@ -120,6 +146,7 @@ fun WebBrowserView(
     val onProgressLatest by rememberUpdatedState(onProgressChanged)
     val onFinishedLatest by rememberUpdatedState(onPageFinished)
     val onVideoPlaybackLatest by rememberUpdatedState(onVideoPlaybackChanged)
+    val onGoogleSyncLatest by rememberUpdatedState(onGoogleSessionSync)
     val onSnapshotLatest by rememberUpdatedState(onSnapshotCaptured)
     val onBounceLatest by rememberUpdatedState(onEdgeBounce)
 
@@ -128,13 +155,26 @@ fun WebBrowserView(
         onVideoPlaybackLatest(currentTabId, effectiveVideoPlaying)
     }
 
-    // Exit fullscreen video cleanly on system Back gesture without leaving the page
-    BackHandler(enabled = customVideoView != null) {
-        try {
-            customVideoCallback?.onCustomViewHidden()
-        } catch (_: Throwable) {}
-        customVideoView = null
-        customVideoCallback = null
+    // Handle Back for fullscreen video or OAuth popup window cleanly without leaving the page
+    BackHandler(enabled = customVideoView != null || oauthPopupWebView != null) {
+        val popup = oauthPopupWebView
+        when {
+            customVideoView != null -> {
+                try {
+                    customVideoCallback?.onCustomViewHidden()
+                } catch (_: Throwable) {}
+                customVideoView = null
+                customVideoCallback = null
+            }
+            popup != null -> {
+                if (popup.canGoBack()) {
+                    popup.goBack()
+                } else {
+                    popup.destroy()
+                    oauthPopupWebView = null
+                }
+            }
+        }
     }
 
     // Lifecycle-aware pause/resume so inactive/backgrounded sessions conserve CPU & battery on all devices
@@ -208,10 +248,14 @@ fun WebBrowserView(
 
     DisposableEffect(isPrivate) {
         onDispose {
+            oauthPopupWebView?.destroy()
+            oauthPopupWebView = null
             if (isPrivate) {
                 try {
                     CookieManager.getInstance().removeSessionCookies(null)
                 } catch (_: Throwable) {}
+            } else {
+                GoogleWebSessionManager.flushCookies()
             }
         }
     }
@@ -245,9 +289,16 @@ fun WebBrowserView(
                     isVerticalScrollBarEnabled = true
                     overScrollMode = View.OVER_SCROLL_NEVER
 
+                    GoogleWebSessionManager.configureSharedSessionWebView(
+                        context = ctx,
+                        webView = this,
+                        isPrivate = isPrivate
+                    )
+
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = !isPrivate
+                        databaseEnabled = !isPrivate
                         loadWithOverviewMode = true
                         useWideViewPort = true
                         setSupportZoom(true)
@@ -387,6 +438,19 @@ fun WebBrowserView(
                                 wv.canGoForward(),
                                 currentPrivate
                             )
+                            if (!currentPrivate) {
+                                GoogleWebSessionManager.flushCookies()
+                                if (GoogleWebSessionManager.isGoogleDomain(finalUrl)) {
+                                    val active = GoogleWebSessionManager.isGoogleSessionActive()
+                                    if (active) {
+                                        GoogleWebSessionManager.extractProfileFromWebView(wv) { profile ->
+                                            onGoogleSyncLatest(true, profile.email, profile.name, profile.avatarUrl)
+                                        }
+                                    } else {
+                                        onGoogleSyncLatest(false, "", "", "")
+                                    }
+                                }
+                            }
                             captureWebViewThumbnail(wv, currentDeviceProfile)?.let { bmp ->
                                 onSnapshotLatest(currentTabId, bmp)
                             }
@@ -401,6 +465,64 @@ fun WebBrowserView(
                                 GpuRenderController.injectPageSfProTypography(view)
                                 injectVideoPlaybackObserver(view)
                             }
+                        }
+
+                        override fun onCreateWindow(
+                            view: WebView?,
+                            isDialog: Boolean,
+                            isUserGesture: Boolean,
+                            resultMsg: Message?
+                        ): Boolean {
+                            val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                            val child = WebView(ctx).apply {
+                                GoogleWebSessionManager.configureSharedSessionWebView(
+                                    context = ctx,
+                                    webView = this,
+                                    isPrivate = currentPrivate
+                                )
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(
+                                        v: WebView?,
+                                        req: WebResourceRequest?
+                                    ): Boolean {
+                                        val s = req?.url?.scheme?.lowercase()
+                                        return s != null && s != "http" && s != "https"
+                                    }
+
+                                    override fun onPageStarted(
+                                        v: WebView?,
+                                        startedUrl: String?,
+                                        favicon: Bitmap?
+                                    ) {
+                                        super.onPageStarted(v, startedUrl, favicon)
+                                        oauthPopupUrl = startedUrl.orEmpty()
+                                    }
+
+                                    override fun onPageFinished(v: WebView?, finishedUrl: String?) {
+                                        super.onPageFinished(v, finishedUrl)
+                                        oauthPopupUrl = finishedUrl ?: v?.url.orEmpty()
+                                        if (!currentPrivate) {
+                                            GoogleWebSessionManager.flushCookies()
+                                        }
+                                    }
+                                }
+                                webChromeClient = object : WebChromeClient() {
+                                    override fun onCloseWindow(window: WebView?) {
+                                        if (!currentPrivate) {
+                                            GoogleWebSessionManager.flushCookies()
+                                        }
+                                        window?.destroy()
+                                        if (oauthPopupWebView === window) {
+                                            oauthPopupWebView = null
+                                        }
+                                    }
+                                }
+                            }
+                            oauthPopupWebView?.destroy()
+                            oauthPopupWebView = child
+                            transport.webView = child
+                            resultMsg.sendToTarget()
+                            return true
                         }
 
                         override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
@@ -433,6 +555,9 @@ fun WebBrowserView(
             },
             update = { wv ->
                 webViewRef = wv
+                try {
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(wv, !isPrivate)
+                } catch (_: Throwable) {}
                 GpuRenderController.applyWebViewGpuPipeline(
                     webView = wv,
                     forceGpuRendering = forceGpuRendering,
@@ -445,6 +570,86 @@ fun WebBrowserView(
                 }
             }
         )
+
+        // OAuth / Federated Sign-In Popup Window Surface (e.g. "Continue with Google" on websites)
+        val activeOAuthPopup = oauthPopupWebView
+        if (activeOAuthPopup != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(style.glassBaseColor)
+                    .statusBarsPadding()
+                    .testTag("oauth_popup_container")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .padding(horizontal = 16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Lock,
+                            contentDescription = null,
+                            tint = style.contentSecondary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = BrowserRepository.extractDomain(oauthPopupUrl).ifBlank { "Sign In" },
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = style.contentPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(style.activeSegmentFill)
+                            .bouncyClickable(
+                                pressedScale = 0.88f,
+                                contentDescriptionText = "Close sign-in popup",
+                                onClick = {
+                                    activeOAuthPopup.destroy()
+                                    oauthPopupWebView = null
+                                }
+                            )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Close sign-in popup",
+                            tint = style.contentPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { c -> FrameLayout(c) },
+                    update = { container ->
+                        if (activeOAuthPopup.parent !== container) {
+                            (activeOAuthPopup.parent as? ViewGroup)?.removeView(activeOAuthPopup)
+                            container.removeAllViews()
+                            container.addView(
+                                activeOAuthPopup,
+                                FrameLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                            )
+                        }
+                    }
+                )
+            }
+        }
 
         // Fullscreen HTML5 Video surface when a webpage player enters fullscreen
         val activeFullscreenVideo = customVideoView

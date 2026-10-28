@@ -412,6 +412,12 @@ class BrowserRepository(
     suspend fun setImmersiveOsMode(enabled: Boolean) = preferences.setImmersiveOsMode(enabled)
     suspend fun setPrivateMode(isPrivate: Boolean, fallbackTabId: Long) =
         preferences.setActiveTab(fallbackTabId, isPrivate)
+    suspend fun setGoogleAccountSession(
+        signedIn: Boolean,
+        email: String = "",
+        name: String = "",
+        avatarUrl: String = ""
+    ) = preferences.setGoogleAccountSession(signedIn, email, name, avatarUrl)
 
     companion object {
         fun normalizeUrlOrSearch(raw: String): String {

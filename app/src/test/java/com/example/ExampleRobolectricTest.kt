@@ -168,4 +168,83 @@ class ExampleRobolectricTest {
         assertEquals(sfPro, typography.labelLarge.fontFamily)
         assertEquals(sfPro, typography.labelMedium.fontFamily)
     }
+
+    @Test
+    fun `google web session sanitizes WebView user agent and persists signed-in account state`() =
+        kotlinx.coroutines.runBlocking {
+            val rawWvUa =
+                "Mozilla/5.0 (Linux; Android 16; Pixel 9 Build/BP2A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/134.0.6998.95 Mobile Safari/537.36"
+            val sanitized = com.example.core.GoogleWebSessionManager.sanitizeBrowserUserAgent(rawWvUa)
+            assertFalse("Sanitized UA must strip '; wv'", sanitized.contains("; wv"))
+            assertFalse("Sanitized UA must strip 'Version/4.0'", sanitized.contains("Version/4.0"))
+            assertTrue("Sanitized UA must preserve Chromium version", sanitized.contains("Chrome/134.0.6998.95"))
+
+            assertFalse(
+                com.example.core.GoogleWebSessionManager.hasAuthenticatedGoogleCookie(
+                    "NID=511=anon_token_xyz; __Host-GAPS=1:prelogin_token"
+                )
+            )
+            assertTrue(
+                com.example.core.GoogleWebSessionManager.hasAuthenticatedGoogleCookie(
+                    "NID=511=xyz; SID=g.a000real_authenticated_session_token; SAPISID=hash_val_123456"
+                )
+            )
+            assertFalse(
+                com.example.core.GoogleWebSessionManager.isPostLoginDestinationUrl(
+                    "https://accounts.google.com/v3/signin/identifier?continue=https://myaccount.google.com/"
+                )
+            )
+            assertTrue(
+                com.example.core.GoogleWebSessionManager.isPostLoginDestinationUrl(
+                    "https://myaccount.google.com/?utm_source=sign_in"
+                )
+            )
+
+            val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+            val vm = com.example.ui.BrowserViewModel(app)
+            val collectJob = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+                vm.uiState.collect {}
+            }
+            try {
+                var attempts = 0
+                while (!vm.uiState.value.isReady && attempts < 50) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(40)
+                    attempts++
+                }
+
+                vm.openGoogleSignInSheet()
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertTrue(vm.uiState.value.isGoogleSignInSheetOpen)
+
+                vm.onGoogleSignInCompleted(
+                    email = "alex@example.com",
+                    name = "Alex Rivera",
+                    avatarUrl = ""
+                )
+                var syncAttempts = 0
+                while (!vm.uiState.value.settings.isGoogleSignedIn && syncAttempts < 40) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(30)
+                    syncAttempts++
+                }
+
+                assertFalse(vm.uiState.value.isGoogleSignInSheetOpen)
+                assertTrue(vm.uiState.value.settings.isGoogleSignedIn)
+                assertEquals("alex@example.com", vm.uiState.value.settings.googleAccountEmail)
+                assertEquals("Alex Rivera", vm.uiState.value.settings.googleAccountName)
+
+                vm.signOutGoogleAccount()
+                var signOutAttempts = 0
+                while (vm.uiState.value.settings.isGoogleSignedIn && signOutAttempts < 40) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(30)
+                    signOutAttempts++
+                }
+                assertFalse(vm.uiState.value.settings.isGoogleSignedIn)
+                assertEquals("", vm.uiState.value.settings.googleAccountEmail)
+            } finally {
+                collectJob.cancel()
+            }
+        }
 }

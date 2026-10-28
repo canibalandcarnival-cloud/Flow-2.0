@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import android.content.ComponentCallbacks2
 import com.example.core.DeviceOptimizationManager
 import com.example.core.FeedbackManager
+import com.example.core.GoogleWebSessionManager
 import com.example.core.ResolvedWallpaper
 import com.example.core.WallpaperLuminanceAnalyzer
 import com.example.data.BookmarkEntity
@@ -61,6 +62,7 @@ data class BrowserUiState(
     val isTabSwitcherOpen: Boolean = false,
     val isAddressOverlayOpen: Boolean = false,
     val isSettingsSheetOpen: Boolean = false,
+    val isGoogleSignInSheetOpen: Boolean = false,
     val activeTabGroupFilter: String? = null,
     val tabSearchQuery: String = "",
     val isTabSearchActive: Boolean = false,
@@ -128,6 +130,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val isTabSwitcherOpen: Boolean = false,
         val isAddressOverlayOpen: Boolean = false,
         val isSettingsSheetOpen: Boolean = false,
+        val isGoogleSignInSheetOpen: Boolean = false,
         val activeTabGroupFilter: String? = null,
         val tabSearchQuery: String = "",
         val isTabSearchActive: Boolean = false,
@@ -193,6 +196,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             isTabSwitcherOpen = transient.isTabSwitcherOpen,
             isAddressOverlayOpen = transient.isAddressOverlayOpen,
             isSettingsSheetOpen = transient.isSettingsSheetOpen,
+            isGoogleSignInSheetOpen = transient.isGoogleSignInSheetOpen,
             activeTabGroupFilter = transient.activeTabGroupFilter,
             tabSearchQuery = transient.tabSearchQuery,
             isTabSearchActive = transient.isTabSearchActive,
@@ -212,6 +216,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     init {
         viewModelScope.launch {
             repository.ensureSeeded()
+            if (GoogleWebSessionManager.isGoogleSessionActive()) {
+                repository.setGoogleAccountSession(signedIn = true)
+            }
             seededFlow.value = true
         }
         viewModelScope.launch {
@@ -296,6 +303,115 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         transientState.update { it.copy(isSettingsSheetOpen = open) }
     }
 
+    fun openGoogleSignInSheet() {
+        feedback.onGlassTap()
+        transientState.update {
+            it.copy(
+                isGoogleSignInSheetOpen = true,
+                isSettingsSheetOpen = false
+            )
+        }
+    }
+
+    fun closeGoogleSignInSheet() {
+        feedback.onGlassTap()
+        GoogleWebSessionManager.flushCookies()
+        transientState.update { it.copy(isGoogleSignInSheetOpen = false) }
+    }
+
+    fun onGoogleSignInCompleted(
+        email: String = "",
+        name: String = "",
+        avatarUrl: String = ""
+    ) {
+        feedback.onSegmentSwitch()
+        GoogleWebSessionManager.flushCookies()
+        transientState.update { it.copy(isGoogleSignInSheetOpen = false) }
+        viewModelScope.launch {
+            repository.setGoogleAccountSession(
+                signedIn = true,
+                email = email,
+                name = name,
+                avatarUrl = avatarUrl
+            )
+            // Reload active standard tab if viewing a site so the page immediately reflects the signed-in Google account
+            val state = uiState.value
+            if (state.isViewingWebPage && !state.settings.isPrivateMode) {
+                _webCommand.value = WebCommand.Reload
+            }
+            val displayTarget = email.ifBlank { name.ifBlank { "Google Account" } }
+            showToast("Signed in as $displayTarget • Active on sites")
+        }
+    }
+
+    fun syncGoogleWebSessionFromPage(
+        isActive: Boolean,
+        email: String = "",
+        name: String = "",
+        avatarUrl: String = ""
+    ) {
+        viewModelScope.launch {
+            val current = uiState.value.settings
+            if (isActive && (!current.isGoogleSignedIn ||
+                    (email.isNotBlank() && current.googleAccountEmail != email) ||
+                    (name.isNotBlank() && current.googleAccountName != name))
+            ) {
+                repository.setGoogleAccountSession(
+                    signedIn = true,
+                    email = email,
+                    name = name,
+                    avatarUrl = avatarUrl
+                )
+            } else if (!isActive && current.isGoogleSignedIn) {
+                repository.setGoogleAccountSession(signedIn = false)
+            }
+        }
+    }
+
+    fun openGoogleAccountManagement() {
+        feedback.onGlassTap()
+        transientState.update { it.copy(isSettingsSheetOpen = false) }
+        if (uiState.value.settings.isPrivateMode) {
+            viewModelScope.launch {
+                val standardTabs = uiState.value.allTabs.filter { !it.isPrivate }
+                val targetId = if (standardTabs.isEmpty()) {
+                    repository.createNewTab(
+                        isPrivate = false,
+                        initialUrl = GoogleWebSessionManager.GOOGLE_MANAGE_ACCOUNT_URL
+                    )
+                } else {
+                    val first = standardTabs.first()
+                    repository.setPrivateMode(false, first.id)
+                    repository.updateTabNavigation(
+                        first.id,
+                        GoogleWebSessionManager.GOOGLE_MANAGE_ACCOUNT_URL,
+                        "Google Account"
+                    )
+                    _webCommand.value = WebCommand.LoadUrl(GoogleWebSessionManager.GOOGLE_MANAGE_ACCOUNT_URL)
+                    first.id
+                }
+                if (targetId > 0L) {
+                    transientState.update { it.copy(isTabSwitcherOpen = false) }
+                }
+            }
+        } else {
+            openUrlOrSearch(GoogleWebSessionManager.GOOGLE_MANAGE_ACCOUNT_URL)
+        }
+    }
+
+    fun signOutGoogleAccount() {
+        feedback.onTabClosed()
+        GoogleWebSessionManager.signOutGoogleWebSession {
+            viewModelScope.launch {
+                repository.setGoogleAccountSession(signedIn = false)
+                if (uiState.value.isViewingWebPage) {
+                    _webCommand.value = WebCommand.Reload
+                }
+                showToast("Signed out of Google Account")
+            }
+        }
+    }
+
     fun openUrlOrSearch(rawInput: String) {
         val normalized = BrowserRepository.normalizeUrlOrSearch(rawInput)
         if (normalized.isBlank()) return
@@ -347,6 +463,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 isTabSwitcherOpen = false,
                 isAddressOverlayOpen = false,
                 isSettingsSheetOpen = false,
+                isGoogleSignInSheetOpen = false,
                 isVideoPlaying = false,
                 activeSection = TopHubSection.START_PAGE
             )
@@ -361,6 +478,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         feedback.onGlassTap()
         val state = uiState.value
         when {
+            state.isGoogleSignInSheetOpen -> closeGoogleSignInSheet()
             state.isAddressOverlayOpen -> closeAddressOverlay()
             state.isSettingsSheetOpen -> setSettingsSheetOpen(false)
             state.isTabSwitcherOpen -> {
