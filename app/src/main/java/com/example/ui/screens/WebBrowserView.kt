@@ -36,7 +36,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
@@ -105,6 +104,9 @@ fun WebBrowserView(
     forceGpuRendering: Boolean,
     enableGpuRasterization: Boolean,
     disableHardwareOverlays: Boolean,
+    disableGpuVsync: Boolean = true,
+    disableFrameRateLimit: Boolean = true,
+    isTabSwitcherOpen: Boolean = false,
     deviceProfile: DeviceOptimizationManager.DeviceProfile,
     webCommand: BrowserViewModel.WebCommand?,
     onConsumeCommand: () -> Unit,
@@ -221,14 +223,23 @@ fun WebBrowserView(
         onConsumeCommand()
     }
 
-    // Re-apply GPU rendering, GPU rasterization & hardware overlay settings live whenever toggled
-    LaunchedEffect(webViewRef, forceGpuRendering, enableGpuRasterization, disableHardwareOverlays) {
+    // Re-apply GPU rendering, GPU rasterization, hardware overlay & VSync/frame-rate settings live whenever toggled
+    LaunchedEffect(
+        webViewRef,
+        forceGpuRendering,
+        enableGpuRasterization,
+        disableHardwareOverlays,
+        disableGpuVsync,
+        disableFrameRateLimit
+    ) {
         val wv = webViewRef ?: return@LaunchedEffect
         GpuRenderController.applyWebViewGpuPipeline(
             webView = wv,
             forceGpuRendering = forceGpuRendering,
             disableHardwareOverlays = disableHardwareOverlays,
-            enableGpuRasterization = enableGpuRasterization
+            enableGpuRasterization = enableGpuRasterization,
+            disableGpuVsync = disableGpuVsync,
+            disableFrameRateLimit = disableFrameRateLimit
         )
         GpuRenderController.injectPageGpuRasterizationScript(
             webView = wv,
@@ -236,12 +247,22 @@ fun WebBrowserView(
         )
     }
 
-    // Capture crisp tab & backdrop thumbnail once page settles
+    // Capture crisp tab thumbnail once page settles or when entering Tab Switcher (never during scroll flings)
     LaunchedEffect(tabId, url) {
         delay(850L)
         webViewRef?.let { wv ->
             captureWebViewThumbnail(wv, currentDeviceProfile)?.let { bmp ->
                 onSnapshotLatest(tabId, bmp)
+            }
+        }
+    }
+
+    LaunchedEffect(isTabSwitcherOpen) {
+        if (isTabSwitcherOpen) {
+            webViewRef?.let { wv ->
+                captureWebViewThumbnail(wv, currentDeviceProfile)?.let { bmp ->
+                    onSnapshotLatest(currentTabId, bmp)
+                }
             }
         }
     }
@@ -272,11 +293,6 @@ fun WebBrowserView(
                 .testTag("active_webview")
                 .graphicsLayer {
                     translationY = rubberY.value
-                    compositingStrategy = if (forceGpuRendering || disableHardwareOverlays || enableGpuRasterization) {
-                        CompositingStrategy.Offscreen
-                    } else {
-                        CompositingStrategy.Auto
-                    }
                 },
             factory = { ctx ->
                 WebView(ctx).apply {
@@ -284,7 +300,9 @@ fun WebBrowserView(
                         webView = this,
                         forceGpuRendering = forceGpuRendering,
                         disableHardwareOverlays = disableHardwareOverlays,
-                        enableGpuRasterization = enableGpuRasterization
+                        enableGpuRasterization = enableGpuRasterization,
+                        disableGpuVsync = disableGpuVsync,
+                        disableFrameRateLimit = disableFrameRateLimit
                     )
                     isVerticalScrollBarEnabled = true
                     overScrollMode = View.OVER_SCROLL_NEVER
@@ -318,7 +336,7 @@ fun WebBrowserView(
                         "GlassVideoBridge"
                     )
 
-                    // Rubber-band spring touch handler at WebView top & bottom limits + snapshot refresh
+                    // Zero-jank rubber-band spring touch handler at WebView top & bottom limits only
                     var lastTouchY = 0f
                     var isDraggingEdge = false
                     setOnTouchListener { view, event ->
@@ -331,9 +349,18 @@ fun WebBrowserView(
                             MotionEvent.ACTION_MOVE -> {
                                 val dy = event.rawY - lastTouchY
                                 lastTouchY = event.rawY
+                                val currentRubber = rubberY.value
+                                if (!isDraggingEdge && currentRubber == 0f) {
+                                    // Fast-path during normal in-page scrolling: let Chromium's compositor
+                                    // scroll immediately without edge checks or coroutine allocations.
+                                    if ((dy < 0f && wv.canScrollVertically(1)) ||
+                                        (dy > 0f && wv.canScrollVertically(-1))
+                                    ) {
+                                        return@setOnTouchListener false
+                                    }
+                                }
                                 val atTop = !wv.canScrollVertically(-1)
                                 val atBottom = !wv.canScrollVertically(1)
-                                val currentRubber = rubberY.value
 
                                 if ((atTop && dy > 0f) || (atBottom && dy < 0f) || abs(currentRubber) > 1f) {
                                     isDraggingEdge = true
@@ -359,13 +386,6 @@ fun WebBrowserView(
                                         )
                                     }
                                     isDraggingEdge = false
-                                }
-                                // Refresh webpage snapshot for live frosted bottom bar & tab preview
-                                scope.launch {
-                                    delay(240L)
-                                    captureWebViewThumbnail(wv, currentDeviceProfile)?.let { bmp ->
-                                        onSnapshotLatest(currentTabId, bmp)
-                                    }
                                 }
                             }
                         }
@@ -562,7 +582,9 @@ fun WebBrowserView(
                     webView = wv,
                     forceGpuRendering = forceGpuRendering,
                     disableHardwareOverlays = disableHardwareOverlays,
-                    enableGpuRasterization = enableGpuRasterization
+                    enableGpuRasterization = enableGpuRasterization,
+                    disableGpuVsync = disableGpuVsync,
+                    disableFrameRateLimit = disableFrameRateLimit
                 )
                 if (url.isNotBlank() && wv.url != url && wv.originalUrl != url) {
                     isInlineVideoPlaying = false
@@ -683,30 +705,37 @@ fun WebBrowserView(
 }
 
 /**
- * Installs a lightweight, zero-DOM-scan HTML5 video & fullscreen playback observer in the page.
- * Uses native `getElementsByTagName('video')` + Shadow DOM `event.composedPath()` capture events
- * to detect inline and fullscreen video playback immediately and notify [WebVideoPlaybackBridge].
+ * Installs a passive, VSync-bound (`requestAnimationFrame`) HTML5 video & fullscreen observer.
+ * - Uses `{ passive: true, capture: true }` on scroll, wheel, touch, and media events so the
+ *   browser compositor scrolls immediately without waiting on JS handlers.
+ * - Fast-exits scroll/wheel in O(1) whenever no video is actively playing.
+ * - Eliminates `setInterval` timers and `timeupdate` flooding in favor of `requestAnimationFrame`.
  */
 private fun injectVideoPlaybackObserver(webView: WebView) {
     val script = """
         (function() {
             try {
                 if (window.__glassVideoHooked) {
-                    if (window.__glassCheckVideos) window.__glassCheckVideos();
+                    if (window.__glassScheduleVideoCheck) window.__glassScheduleVideoCheck(true);
                     return;
                 }
                 window.__glassVideoHooked = true;
                 var trackedVideos = new Set();
+                var playingVideos = new Set();
                 var lastReported = null;
+                var lastPadding = null;
+                var rafPending = 0;
 
-                function recordTarget(ev) {
+                function extractTargetVideo(ev) {
                     try {
                         var path = ev && ev.composedPath ? ev.composedPath() : null;
                         var node = (path && path.length > 0) ? path[0] : (ev ? ev.target : null);
                         if (node && node.tagName === 'VIDEO') {
                             trackedVideos.add(node);
+                            return node;
                         }
                     } catch (e) {}
+                    return null;
                 }
 
                 function isVisiblePlayingVideo(v) {
@@ -718,41 +747,42 @@ private fun injectVideoPlaybackObserver(webView: WebView) {
                     return rect.bottom > 24 && rect.top < (vh - 24) && rect.right > 16 && rect.left < (vw - 16);
                 }
 
-                function checkVideos() {
+                function runCheck(scanDom) {
+                    rafPending = 0;
                     try {
                         var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
                         var playing = !!fsEl;
 
                         if (!playing) {
-                            var domVideos = document.getElementsByTagName('video');
-                            for (var i = 0; i < domVideos.length; i++) {
-                                trackedVideos.add(domVideos[i]);
-                            }
-                            var frames = document.getElementsByTagName('iframe');
-                            for (var f = 0; f < frames.length; f++) {
-                                try {
-                                    var fDoc = frames[f].contentDocument || (frames[f].contentWindow && frames[f].contentWindow.document);
-                                    if (fDoc) {
-                                        var fVids = fDoc.getElementsByTagName('video');
-                                        for (var fv = 0; fv < fVids.length; fv++) {
-                                            trackedVideos.add(fVids[fv]);
-                                        }
-                                    }
-                                } catch (frameErr) {}
+                            if (scanDom) {
+                                var domVideos = document.getElementsByTagName('video');
+                                for (var i = 0; i < domVideos.length; i++) {
+                                    var dv = domVideos[i];
+                                    trackedVideos.add(dv);
+                                    if (!dv.paused && !dv.ended) playingVideos.add(dv);
+                                }
                             }
 
                             trackedVideos.forEach(function(v) {
                                 if (!v.isConnected) {
                                     trackedVideos.delete(v);
-                                } else if (isVisiblePlayingVideo(v)) {
-                                    playing = true;
+                                    playingVideos.delete(v);
+                                } else if (!v.paused && !v.ended) {
+                                    playingVideos.add(v);
+                                    if (isVisiblePlayingVideo(v)) {
+                                        playing = true;
+                                    }
+                                } else {
+                                    playingVideos.delete(v);
                                 }
                             });
                         }
 
                         window.__glassVideoActivelyPlaying = playing;
-                        if (document && document.body) {
-                            document.body.style.paddingBottom = playing ? '0px' : '88px';
+                        var targetPadding = playing ? '0px' : '88px';
+                        if (document && document.body && lastPadding !== targetPadding) {
+                            lastPadding = targetPadding;
+                            document.body.style.paddingBottom = targetPadding;
                         }
 
                         if (playing !== lastReported) {
@@ -764,24 +794,76 @@ private fun injectVideoPlaybackObserver(webView: WebView) {
                     } catch (err) {}
                 }
 
-                window.__glassCheckVideos = checkVideos;
+                var pendingDomScan = false;
+                function scheduleCheck(scanDom) {
+                    if (scanDom) pendingDomScan = true;
+                    if (rafPending) return;
+                    var raf = window.requestAnimationFrame;
+                    if (raf) {
+                        rafPending = raf(function() {
+                            var doScan = pendingDomScan;
+                            pendingDomScan = false;
+                            runCheck(doScan);
+                        });
+                    } else {
+                        var doScanNow = pendingDomScan;
+                        pendingDomScan = false;
+                        runCheck(doScanNow);
+                    }
+                }
 
-                var mediaEvents = [
-                    'play', 'playing', 'pause', 'ended', 'emptied', 'abort',
-                    'suspend', 'loadeddata', 'timeupdate',
+                window.__glassScheduleVideoCheck = scheduleCheck;
+
+                var passiveCapture = { passive: true, capture: true };
+                var playEvents = ['play', 'playing', 'loadeddata'];
+                for (var p = 0; p < playEvents.length; p++) {
+                    window.addEventListener(playEvents[p], function(ev) {
+                        var v = extractTargetVideo(ev);
+                        if (v && !v.paused && !v.ended) playingVideos.add(v);
+                        scheduleCheck(v === null);
+                    }, passiveCapture);
+                }
+
+                var stopEvents = ['pause', 'ended', 'emptied', 'abort', 'suspend'];
+                for (var s = 0; s < stopEvents.length; s++) {
+                    window.addEventListener(stopEvents[s], function(ev) {
+                        var v = extractTargetVideo(ev);
+                        if (v) playingVideos.delete(v);
+                        scheduleCheck(false);
+                    }, passiveCapture);
+                }
+
+                var fsEvents = [
                     'fullscreenchange', 'webkitfullscreenchange',
                     'webkitbeginfullscreen', 'webkitendfullscreen'
                 ];
-                for (var idx = 0; idx < mediaEvents.length; idx++) {
-                    window.addEventListener(mediaEvents[idx], function(ev) {
-                        recordTarget(ev);
-                        checkVideos();
-                    }, true);
+                for (var f = 0; f < fsEvents.length; f++) {
+                    window.addEventListener(fsEvents[f], function(ev) {
+                        extractTargetVideo(ev);
+                        scheduleCheck(true);
+                    }, passiveCapture);
                 }
-                window.addEventListener('scroll', checkVideos, { passive: true, capture: true });
-                window.addEventListener('resize', checkVideos, { passive: true });
-                setInterval(checkVideos, 650);
-                checkVideos();
+
+                function onPassiveScrollOrWheel() {
+                    if (playingVideos.size === 0 &&
+                        !document.fullscreenElement &&
+                        !document.webkitFullscreenElement) {
+                        return;
+                    }
+                    scheduleCheck(false);
+                }
+
+                window.addEventListener('scroll', onPassiveScrollOrWheel, passiveCapture);
+                window.addEventListener('wheel', onPassiveScrollOrWheel, passiveCapture);
+                window.addEventListener('touchstart', onPassiveScrollOrWheel, passiveCapture);
+                window.addEventListener('touchmove', onPassiveScrollOrWheel, passiveCapture);
+                window.addEventListener('resize', function() {
+                    if (playingVideos.size > 0 || document.fullscreenElement || document.webkitFullscreenElement) {
+                        scheduleCheck(false);
+                    }
+                }, { passive: true });
+
+                scheduleCheck(true);
             } catch (outerErr) {}
         })();
     """.trimIndent()

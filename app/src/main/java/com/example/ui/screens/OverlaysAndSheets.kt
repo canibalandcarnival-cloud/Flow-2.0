@@ -374,6 +374,8 @@ fun WallpaperAndSettingsSheet(
     onRequestBrowserRole: () -> Unit,
     onToggleImmersiveOsMode: (Boolean) -> Unit,
     onToggleHighRefresh: (Boolean) -> Unit,
+    onToggleDisableGpuVsync: (Boolean) -> Unit,
+    onToggleDisableFrameRateLimit: (Boolean) -> Unit,
     onToggleForceGpu: (Boolean) -> Unit,
     onToggleGpuRasterization: (Boolean) -> Unit,
     onToggleDisableHwOverlays: (Boolean) -> Unit,
@@ -833,6 +835,20 @@ fun WallpaperAndSettingsSheet(
                             checked = uiState.settings.highRefreshRateEnabled,
                             onCheckedChange = onToggleHighRefresh,
                             tag = "toggle_360hz"
+                        )
+                        MonochromeToggleRow(
+                            title = stringResource(R.string.disable_gpu_vsync_label),
+                            subtitle = stringResource(R.string.disable_gpu_vsync_subtitle),
+                            checked = uiState.settings.disableGpuVsync,
+                            onCheckedChange = onToggleDisableGpuVsync,
+                            tag = "toggle_disable_gpu_vsync"
+                        )
+                        MonochromeToggleRow(
+                            title = stringResource(R.string.disable_frame_rate_limit_label),
+                            subtitle = stringResource(R.string.disable_frame_rate_limit_subtitle),
+                            checked = uiState.settings.disableFrameRateLimit,
+                            onCheckedChange = onToggleDisableFrameRateLimit,
+                            tag = "toggle_disable_frame_rate_limit"
                         )
                         MonochromeToggleRow(
                             title = stringResource(R.string.enable_gpu_rasterization_label),

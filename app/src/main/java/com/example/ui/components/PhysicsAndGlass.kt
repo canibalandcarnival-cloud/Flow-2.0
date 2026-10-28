@@ -87,6 +87,10 @@ enum class GlassElevation {
     MODAL_OVERLAY
 }
 
+private class LayoutCoordinatesRef(
+    var value: LayoutCoordinates? = null
+)
+
 private class GlassGeometryCache {
     var cachedSize: androidx.compose.ui.geometry.Size = androidx.compose.ui.geometry.Size.Unspecified
     var cachedLayoutDirection: androidx.compose.ui.unit.LayoutDirection? = null
@@ -101,7 +105,8 @@ private class GlassGeometryCache {
  * directly behind its screen coordinates, layered with strict monochrome White (Light Mode) or
  * Black (Dark Mode) translucency and a dual specular rim highlight.
  *
- * Uses zero-allocation cached geometry & brushes so scrolling stays locked at 60–360Hz on all devices.
+ * Uses zero-allocation cached geometry & non-state LayoutCoordinates references so scrolling never
+ * triggers Compose recompositions and stays locked at native display refresh up to 360Hz.
  */
 @Composable
 fun FrostedGlassBox(
@@ -115,7 +120,7 @@ fun FrostedGlassBox(
 ) {
     val style = LocalGlassStyle.current
     val backdrop = LocalSpatialBackdrop.current
-    var coordsHolder by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val coordsRef = remember { LayoutCoordinatesRef() }
     val geometryCache = remember(shape, style) { GlassGeometryCache() }
 
     val tintAlpha = customTintAlpha ?: when (elevation) {
@@ -127,10 +132,10 @@ fun FrostedGlassBox(
     Box(
         contentAlignment = contentAlignment,
         modifier = modifier
-            .onGloballyPositioned { coordsHolder = it }
+            .onGloballyPositioned { coordsRef.value = it }
             .clip(shape)
             .drawBehind {
-                val coords = coordsHolder
+                val coords = coordsRef.value
                 val posInRoot = if (coords != null && coords.isAttached) {
                     coords.positionInRoot()
                 } else {
@@ -174,7 +179,9 @@ fun FrostedGlassBox(
                         backdrop.wallpaperBlurredLayer
                     }
 
+                    var hasSampledBackdrop = false
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && activeLayer != null) {
+                        hasSampledBackdrop = true
                         translate(left = -posInRoot.x, top = -posInRoot.y) {
                             drawLayer(activeLayer)
                         }
@@ -182,6 +189,7 @@ fun FrostedGlassBox(
                         backdrop.rootSize.width > 0 &&
                         backdrop.rootSize.height > 0
                     ) {
+                        hasSampledBackdrop = true
                         val bmp = backdrop.fallbackBlurredBitmap
                         val rootW = backdrop.rootSize.width
                         val rootH = backdrop.rootSize.height
@@ -202,7 +210,12 @@ fun FrostedGlassBox(
                     }
 
                     // Strict Monochrome Frosted Glass Tint (Black in Dark Mode, White in Light Mode)
-                    drawRect(color = style.glassBaseColor.copy(alpha = tintAlpha))
+                    val effectiveTintAlpha = if (hasSampledBackdrop) {
+                        tintAlpha
+                    } else {
+                        (tintAlpha + 0.14f).coerceAtMost(0.94f)
+                    }
+                    drawRect(color = style.glassBaseColor.copy(alpha = effectiveTintAlpha))
 
                     // Subtle top optical refraction sheen
                     if (sheen != null) {

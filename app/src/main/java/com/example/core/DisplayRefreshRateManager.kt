@@ -25,8 +25,14 @@ object DisplayRefreshRateManager {
         val engineTargetHz: Int = 360
     )
 
-    fun applyHighRefreshRate(activity: Activity, enabled: Boolean): DisplayCapability {
+    fun applyHighRefreshRate(
+        activity: Activity,
+        enabled: Boolean,
+        disableFrameRateLimit: Boolean = true,
+        disableGpuVsync: Boolean = true
+    ): DisplayCapability {
         val window = activity.window ?: return DisplayCapability(60, 60)
+        val unlockMaxRefresh = enabled || disableFrameRateLimit
         val display: Display? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             activity.display
         } else {
@@ -48,7 +54,7 @@ object DisplayRefreshRateManager {
                         it.physicalHeight == currentMode.physicalHeight &&
                         it.refreshRate <= TARGET_MAX_HZ + 0.5f
                 }
-                val bestMode = if (enabled) {
+                val bestMode = if (unlockMaxRefresh) {
                     (sameResModes.maxByOrNull { it.refreshRate }
                         ?: modes.filter { it.refreshRate <= TARGET_MAX_HZ + 0.5f }
                             .maxByOrNull { it.refreshRate })
@@ -61,27 +67,27 @@ object DisplayRefreshRateManager {
                     params.preferredDisplayModeId = bestMode.modeId
                     chosenHz = bestMode.refreshRate
                 }
-                params.preferredRefreshRate = if (enabled) TARGET_MAX_HZ else 60f
+                params.preferredRefreshRate = if (unlockMaxRefresh) TARGET_MAX_HZ else 60f
                 window.attributes = params
             }
         } else {
             val params = window.attributes
-            params.preferredRefreshRate = if (enabled) TARGET_MAX_HZ else 60f
+            params.preferredRefreshRate = if (unlockMaxRefresh) TARGET_MAX_HZ else 60f
             window.attributes = params
         }
 
-        // Android 14+ (API 34+): Request high frame rate category on root view
+        // Android 14+ (API 34+): Request uncapped / high frame rate on root view so LTPO never throttles scroll
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            window.decorView.requestedFrameRate = if (enabled) {
-                View.REQUESTED_FRAME_RATE_CATEGORY_HIGH
-            } else {
-                View.REQUESTED_FRAME_RATE_CATEGORY_NORMAL
+            window.decorView.requestedFrameRate = when {
+                disableFrameRateLimit -> TARGET_MAX_HZ
+                enabled || disableGpuVsync -> View.REQUESTED_FRAME_RATE_CATEGORY_HIGH
+                else -> View.REQUESTED_FRAME_RATE_CATEGORY_NORMAL
             }
         }
 
         // Android 15+ (API 35+): Enable immediate frame rate boost on touch/fling
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-            window.frameRateBoostOnTouchEnabled = enabled
+            window.frameRateBoostOnTouchEnabled = unlockMaxRefresh || disableGpuVsync
         }
 
         return DisplayCapability(

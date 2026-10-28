@@ -42,7 +42,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -143,13 +142,19 @@ fun GlassBrowserApp(
         }
     }
 
-    // Apply up-to-360Hz refresh rate & touch boost whenever settings change
-    LaunchedEffect(uiState.settings.highRefreshRateEnabled) {
+    // Apply up-to-360Hz refresh rate, uncapped frame pacing & touch boost whenever settings change
+    LaunchedEffect(
+        uiState.settings.highRefreshRateEnabled,
+        uiState.settings.disableFrameRateLimit,
+        uiState.settings.disableGpuVsync
+    ) {
         val activity = context as? Activity
         if (activity != null) {
             displayCapability = DisplayRefreshRateManager.applyHighRefreshRate(
                 activity = activity,
-                enabled = uiState.settings.highRefreshRateEnabled
+                enabled = uiState.settings.highRefreshRateEnabled,
+                disableFrameRateLimit = uiState.settings.disableFrameRateLimit,
+                disableGpuVsync = uiState.settings.disableGpuVsync
             )
         }
     }
@@ -233,40 +238,39 @@ fun GlassBrowserApp(
         }
     }
 
-    // Hardware GraphicsLayers for two-plane spatial frosted glass blur
+    // Hardware GraphicsLayer for static Start Page wallpaper blur (zero per-scroll-frame recording!)
     val wallpaperBlurredLayer = rememberGraphicsLayer()
-    val sceneBlurredLayer = rememberGraphicsLayer()
 
     val cardBlurPx = with(density) { uiState.deviceProfile.cardBlurDp.dp.toPx() }
-    val barBlurPx = with(density) { uiState.deviceProfile.barBlurDp.dp.toPx() }
 
-    LaunchedEffect(wallpaperBlurredLayer, sceneBlurredLayer, cardBlurPx, barBlurPx) {
+    LaunchedEffect(wallpaperBlurredLayer, cardBlurPx) {
         configureBlurLayer(wallpaperBlurredLayer, cardBlurPx)
-        configureBlurLayer(sceneBlurredLayer, barBlurPx)
     }
 
     val activeTab = uiState.activeTab
-    val activeWebSnapshot = activeTab?.let { viewModel.tabSnapshots[it.id] }
 
-    // Never expose the Start Page wallpaper fallback when viewing a site!
+    // Never expose the Start Page wallpaper when viewing a site, and never re-record live scrolling WebView frames!
     val spatialBackdrop = remember(
         wallpaperBlurredLayer,
-        sceneBlurredLayer,
         uiState.isViewingWebPage,
         uiState.resolvedWallpaper?.blurredBitmap,
-        activeWebSnapshot,
         rootSize
     ) {
-        SpatialBackdropState(
-            wallpaperBlurredLayer = wallpaperBlurredLayer,
-            sceneBlurredLayer = sceneBlurredLayer,
-            fallbackBlurredBitmap = if (uiState.isViewingWebPage) {
-                activeWebSnapshot
-            } else {
-                uiState.resolvedWallpaper?.blurredBitmap
-            },
-            rootSize = rootSize
-        )
+        if (uiState.isViewingWebPage) {
+            SpatialBackdropState(
+                wallpaperBlurredLayer = null,
+                sceneBlurredLayer = null,
+                fallbackBlurredBitmap = null,
+                rootSize = rootSize
+            )
+        } else {
+            SpatialBackdropState(
+                wallpaperBlurredLayer = wallpaperBlurredLayer,
+                sceneBlurredLayer = wallpaperBlurredLayer,
+                fallbackBlurredBitmap = uiState.resolvedWallpaper?.blurredBitmap,
+                rootSize = rootSize
+            )
+        }
     }
 
     val backgroundZoomScale by animateFloatAsState(
@@ -287,70 +291,48 @@ fun GlassBrowserApp(
                     .fillMaxSize()
                     .background(style.glassBaseColor)
                     .onSizeChanged { rootSize = it }
-                    .graphicsLayer {
-                        compositingStrategy = if (
-                            uiState.settings.disableHardwareOverlays ||
-                            uiState.settings.forceGpuRendering ||
-                            uiState.settings.enableGpuRasterization
-                        ) {
-                            CompositingStrategy.Offscreen
-                        } else {
-                            CompositingStrategy.Auto
-                        }
-                    }
             ) {
                 // =========================================================================
-                // PLANE 1: Active Browser Content (Wallpaper ONLY on Start Page; Full-Bleed Site on WebView)
+                // PLANE 1: Isolated Browser Content (Full-Bleed WebView on Sites; Untinted Wallpaper on Start Page)
                 // =========================================================================
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .drawWithContent {
-                            drawContent()
-                            sceneBlurredLayer.record {
-                                this@drawWithContent.drawContent()
+                        .then(
+                            if (backgroundZoomScale != 1f) {
+                                Modifier.graphicsLayer {
+                                    scaleX = backgroundZoomScale
+                                    scaleY = backgroundZoomScale
+                                }
+                            } else {
+                                Modifier
                             }
-                        }
-                        .graphicsLayer {
-                            scaleX = backgroundZoomScale
-                            scaleY = backgroundZoomScale
-                        }
+                        )
                 ) {
                     if (activeTab != null && activeTab.url.isNotBlank()) {
-                        // Viewing a live site: NO wallpaper rendered behind or below!
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(style.glassBaseColor)
-                        ) {
-                            if (activeWebSnapshot != null) {
-                                Image(
-                                    bitmap = activeWebSnapshot,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                            WebBrowserView(
-                                tabId = activeTab.id,
-                                url = activeTab.url,
-                                isPrivate = activeTab.isPrivate,
-                                forceGpuRendering = uiState.settings.forceGpuRendering,
-                                enableGpuRasterization = uiState.settings.enableGpuRasterization,
-                                disableHardwareOverlays = uiState.settings.disableHardwareOverlays,
-                                deviceProfile = uiState.deviceProfile,
-                                webCommand = webCommand,
-                                onConsumeCommand = viewModel::consumeWebCommand,
-                                onPageStarted = viewModel::onWebPageStarted,
-                                onProgressChanged = viewModel::onWebProgressChanged,
-                                onPageFinished = viewModel::onWebPageFinished,
-                                onVideoPlaybackChanged = viewModel::onWebVideoPlaybackChanged,
-                                onGoogleSessionSync = viewModel::syncGoogleWebSessionFromPage,
-                                onSnapshotCaptured = viewModel::updateTabSnapshot,
-                                onEdgeBounce = viewModel.feedback::onEdgeBounce,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
+                        // Viewing a live site: Dedicated isolated WebView composite layer, NO wallpaper or snapshot behind!
+                        WebBrowserView(
+                            tabId = activeTab.id,
+                            url = activeTab.url,
+                            isPrivate = activeTab.isPrivate,
+                            forceGpuRendering = uiState.settings.forceGpuRendering,
+                            enableGpuRasterization = uiState.settings.enableGpuRasterization,
+                            disableHardwareOverlays = uiState.settings.disableHardwareOverlays,
+                            disableGpuVsync = uiState.settings.disableGpuVsync,
+                            disableFrameRateLimit = uiState.settings.disableFrameRateLimit,
+                            isTabSwitcherOpen = uiState.isTabSwitcherOpen,
+                            deviceProfile = uiState.deviceProfile,
+                            webCommand = webCommand,
+                            onConsumeCommand = viewModel::consumeWebCommand,
+                            onPageStarted = viewModel::onWebPageStarted,
+                            onProgressChanged = viewModel::onWebProgressChanged,
+                            onPageFinished = viewModel::onWebPageFinished,
+                            onVideoPlaybackChanged = viewModel::onWebVideoPlaybackChanged,
+                            onGoogleSessionSync = viewModel::syncGoogleWebSessionFromPage,
+                            onSnapshotCaptured = viewModel::updateTabSnapshot,
+                            onEdgeBounce = viewModel.feedback::onEdgeBounce,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     } else {
                         // OS Home / Start Page Hub: Render 100% Untinted Wallpaper + Hub Content
                         Box(
@@ -578,6 +560,8 @@ fun GlassBrowserApp(
                         },
                         onToggleImmersiveOsMode = viewModel::setImmersiveOsMode,
                         onToggleHighRefresh = viewModel::setHighRefreshRateEnabled,
+                        onToggleDisableGpuVsync = viewModel::setDisableGpuVsync,
+                        onToggleDisableFrameRateLimit = viewModel::setDisableFrameRateLimit,
                         onToggleForceGpu = viewModel::setForceGpuRendering,
                         onToggleGpuRasterization = viewModel::setEnableGpuRasterization,
                         onToggleDisableHwOverlays = viewModel::setDisableHardwareOverlays,

@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.ComponentCallbacks2
+import com.example.core.BrowserEngineInitializer
 import com.example.core.DeviceOptimizationManager
 import com.example.core.FeedbackManager
 import com.example.core.GoogleWebSessionManager
@@ -759,6 +760,36 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun setHighRefreshRateEnabled(enabled: Boolean) {
         feedback.onSegmentSwitch()
         viewModelScope.launch { repository.setHighRefreshRateEnabled(enabled) }
+    }
+
+    fun setDisableGpuVsync(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        viewModelScope.launch {
+            repository.setDisableGpuVsync(enabled)
+            val s = uiState.value.settings
+            BrowserEngineInitializer.initialize(
+                context = getApplication(),
+                disableGpuVsync = enabled,
+                disableFrameRateLimit = s.disableFrameRateLimit,
+                enableGpuRasterization = s.enableGpuRasterization
+            )
+            showToast(if (enabled) "GPU VSync disabled (--disable-gpu-vsync)" else "GPU VSync standard")
+        }
+    }
+
+    fun setDisableFrameRateLimit(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        viewModelScope.launch {
+            repository.setDisableFrameRateLimit(enabled)
+            val s = uiState.value.settings
+            BrowserEngineInitializer.initialize(
+                context = getApplication(),
+                disableGpuVsync = s.disableGpuVsync,
+                disableFrameRateLimit = enabled,
+                enableGpuRasterization = s.enableGpuRasterization
+            )
+            showToast(if (enabled) "Frame rate limit disabled (uncapped)" else "Frame rate limit standard")
+        }
     }
 
     fun setForceGpuRendering(enabled: Boolean) {

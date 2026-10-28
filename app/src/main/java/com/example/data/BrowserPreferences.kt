@@ -21,6 +21,8 @@ data class BrowserSettingsState(
     val sfxEnabled: Boolean = true,
     val hapticsEnabled: Boolean = true,
     val highRefreshRateEnabled: Boolean = true,
+    val disableGpuVsync: Boolean = true,
+    val disableFrameRateLimit: Boolean = true,
     val forceGpuRendering: Boolean = true,
     val enableGpuRasterization: Boolean = true,
     val disableHardwareOverlays: Boolean = true,
@@ -41,6 +43,8 @@ class BrowserPreferences(private val context: Context) {
         val SFX_ENABLED = booleanPreferencesKey("sfx_enabled")
         val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
         val HIGH_REFRESH_ENABLED = booleanPreferencesKey("high_refresh_enabled")
+        val DISABLE_GPU_VSYNC = booleanPreferencesKey("disable_gpu_vsync")
+        val DISABLE_FRAME_RATE_LIMIT = booleanPreferencesKey("disable_frame_rate_limit")
         val FORCE_GPU_RENDERING = booleanPreferencesKey("force_gpu_rendering")
         val ENABLE_GPU_RASTERIZATION = booleanPreferencesKey("enable_gpu_rasterization")
         val DISABLE_HW_OVERLAYS = booleanPreferencesKey("disable_hw_overlays")
@@ -60,6 +64,8 @@ class BrowserPreferences(private val context: Context) {
             sfxEnabled = prefs[Keys.SFX_ENABLED] ?: true,
             hapticsEnabled = prefs[Keys.HAPTICS_ENABLED] ?: true,
             highRefreshRateEnabled = prefs[Keys.HIGH_REFRESH_ENABLED] ?: true,
+            disableGpuVsync = prefs[Keys.DISABLE_GPU_VSYNC] ?: true,
+            disableFrameRateLimit = prefs[Keys.DISABLE_FRAME_RATE_LIMIT] ?: true,
             forceGpuRendering = prefs[Keys.FORCE_GPU_RENDERING] ?: true,
             enableGpuRasterization = prefs[Keys.ENABLE_GPU_RASTERIZATION] ?: true,
             disableHardwareOverlays = prefs[Keys.DISABLE_HW_OVERLAYS] ?: true,
@@ -91,6 +97,14 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setHighRefreshRateEnabled(enabled: Boolean) {
         context.browserDataStore.edit { it[Keys.HIGH_REFRESH_ENABLED] = enabled }
+    }
+
+    suspend fun setDisableGpuVsync(enabled: Boolean) {
+        context.browserDataStore.edit { it[Keys.DISABLE_GPU_VSYNC] = enabled }
+    }
+
+    suspend fun setDisableFrameRateLimit(enabled: Boolean) {
+        context.browserDataStore.edit { it[Keys.DISABLE_FRAME_RATE_LIMIT] = enabled }
     }
 
     suspend fun setForceGpuRendering(enabled: Boolean) {

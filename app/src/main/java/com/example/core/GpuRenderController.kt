@@ -2,7 +2,6 @@ package com.example.core
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
-import android.graphics.Paint
 import android.os.Build
 import android.view.View
 import android.view.WindowManager
@@ -16,13 +15,10 @@ import android.webkit.WebView
  */
 object GpuRenderController {
 
-    private val sharedGpuPaint: Paint by lazy {
-        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
-    }
-
     /**
      * Applies "Force GPU Rendering", "Disable Hardware Overlays", and "Enable GPU Rasterization"
-     * to the Activity Window & root DecorView.
+     * to the Activity Window without forcing an extra full-window offscreen FBO on DecorView,
+     * allowing SurfaceFlinger/RenderThread to composite RenderNodes directly with zero wrapper layer clash.
      */
     fun applyWindowGpuPipeline(
         activity: Activity,
@@ -36,44 +32,52 @@ object GpuRenderController {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Keep unified default sRGB GPU composition when overlays are disabled to prevent HWC plane splits
             window.colorMode = ActivityInfo.COLOR_MODE_DEFAULT
         }
 
-        val targetLayerType = when {
-            disableHardwareOverlays -> View.LAYER_TYPE_HARDWARE
-            forceGpuRendering -> View.LAYER_TYPE_HARDWARE
-            enableGpuRasterization -> View.LAYER_TYPE_HARDWARE
-            else -> View.LAYER_TYPE_NONE
-        }
-        val paint = if (targetLayerType == View.LAYER_TYPE_HARDWARE) sharedGpuPaint else null
-        if (window.decorView.layerType != targetLayerType) {
-            window.decorView.setLayerType(targetLayerType, paint)
+        // Keep DecorView on direct RenderNode hardware acceleration (LAYER_TYPE_NONE) rather than an
+        // extra full-screen offscreen FBO texture blit that clashes with WebView's composite layer.
+        if (window.decorView.layerType != View.LAYER_TYPE_NONE) {
+            window.decorView.setLayerType(View.LAYER_TYPE_NONE, null)
         }
     }
 
     /**
-     * Applies "Force GPU Rendering", "Disable Hardware Overlays", and "Enable GPU Rasterization"
-     * directly to the active Chromium WebView instance.
-     *
-     * - [enableGpuRasterization]: Enables GPU offscreen tile pre-rasterization (`offscreenPreRaster`)
-     *   and hardware GPU texture backing so vector paths, fonts, and scroll tiles rasterize directly
-     *   on the GPU without blank checkerboarding during fast momentum flings.
+     * Applies isolated hardware composite layer, GPU tile pre-rasterization (`offscreenPreRaster`),
+     * and uncapped frame-rate / GPU VSync bypass settings directly to the active Chromium WebView.
      */
     @Suppress("DEPRECATION")
     fun applyWebViewGpuPipeline(
         webView: WebView,
         forceGpuRendering: Boolean,
         disableHardwareOverlays: Boolean,
-        enableGpuRasterization: Boolean = true
+        enableGpuRasterization: Boolean = true,
+        disableGpuVsync: Boolean = true,
+        disableFrameRateLimit: Boolean = true
     ) {
+        BrowserEngineInitializer.initialize(
+            context = webView.context,
+            disableGpuVsync = disableGpuVsync,
+            disableFrameRateLimit = disableFrameRateLimit,
+            enableGpuRasterization = enableGpuRasterization
+        )
+
         val useHardwareLayer = forceGpuRendering || disableHardwareOverlays || enableGpuRasterization
         val desiredLayer = if (useHardwareLayer) View.LAYER_TYPE_HARDWARE else View.LAYER_TYPE_NONE
         if (webView.layerType != desiredLayer) {
-            webView.setLayerType(
-                desiredLayer,
-                if (useHardwareLayer) sharedGpuPaint else null
-            )
+            // Pass null Paint so RenderThread composites the isolated WebView hardware layer directly
+            // without extra software Paint shader/dither passes on every scroll frame.
+            webView.setLayerType(desiredLayer, null)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            try {
+                webView.requestedFrameRate = when {
+                    disableFrameRateLimit -> DisplayRefreshRateManager.TARGET_MAX_HZ
+                    disableGpuVsync -> View.REQUESTED_FRAME_RATE_CATEGORY_HIGH
+                    else -> View.REQUESTED_FRAME_RATE_CATEGORY_DEFAULT
+                }
+            } catch (_: Throwable) {}
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -93,7 +97,7 @@ object GpuRenderController {
 
         try {
             webView.settings.setRenderPriority(
-                if (forceGpuRendering || enableGpuRasterization) {
+                if (forceGpuRendering || enableGpuRasterization || disableFrameRateLimit || disableGpuVsync) {
                     WebSettings.RenderPriority.HIGH
                 } else {
                     WebSettings.RenderPriority.NORMAL
@@ -137,8 +141,8 @@ object GpuRenderController {
     }
 
     /**
-     * Applies GPU-composited rasterization hints and safe bottom clearance to loaded web documents
-     * so scrolling layers, media elements, and typography rasterize cleanly on the GPU.
+     * Applies isolated GPU composite layer hints and safe bottom clearance to loaded web documents
+     * without dirtying layout if bottom padding is already set.
      */
     fun injectPageGpuRasterizationScript(
         webView: WebView,
@@ -150,12 +154,14 @@ object GpuRenderController {
             (function() {
                 try {
                     if (document && document.body && !window.__glassVideoActivelyPlaying) {
-                        document.body.style.paddingBottom = '88px';
+                        if (document.body.style.paddingBottom !== '88px') {
+                            document.body.style.paddingBottom = '88px';
+                        }
                     }
                     if (document && document.head && !document.getElementById('__glass_gpu_raster')) {
                         var st = document.createElement('style');
                         st.id = '__glass_gpu_raster';
-                        st.textContent = 'html,body{-webkit-font-smoothing:antialiased;text-rendering:optimizeSpeed;}img,video,canvas{backface-visibility:hidden;transform:translateZ(0);}';
+                        st.textContent = 'html{will-change:scroll-position;-webkit-overflow-scrolling:touch;}body{-webkit-font-smoothing:antialiased;text-rendering:optimizeSpeed;}img,video,canvas{backface-visibility:hidden;transform:translateZ(0);}';
                         document.head.appendChild(st);
                     }
                 } catch (e) {}
@@ -166,7 +172,9 @@ object GpuRenderController {
             (function() {
                 try {
                     if (document && document.body && !window.__glassVideoActivelyPlaying) {
-                        document.body.style.paddingBottom = '88px';
+                        if (document.body.style.paddingBottom !== '88px') {
+                            document.body.style.paddingBottom = '88px';
+                        }
                     }
                     var existing = document && document.getElementById('__glass_gpu_raster');
                     if (existing && existing.parentNode) {

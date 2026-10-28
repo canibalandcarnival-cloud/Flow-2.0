@@ -406,6 +406,8 @@ class BrowserRepository(
     suspend fun setSfxEnabled(enabled: Boolean) = preferences.setSfxEnabled(enabled)
     suspend fun setHapticsEnabled(enabled: Boolean) = preferences.setHapticsEnabled(enabled)
     suspend fun setHighRefreshRateEnabled(enabled: Boolean) = preferences.setHighRefreshRateEnabled(enabled)
+    suspend fun setDisableGpuVsync(enabled: Boolean) = preferences.setDisableGpuVsync(enabled)
+    suspend fun setDisableFrameRateLimit(enabled: Boolean) = preferences.setDisableFrameRateLimit(enabled)
     suspend fun setForceGpuRendering(enabled: Boolean) = preferences.setForceGpuRendering(enabled)
     suspend fun setEnableGpuRasterization(enabled: Boolean) = preferences.setEnableGpuRasterization(enabled)
     suspend fun setDisableHardwareOverlays(enabled: Boolean) = preferences.setDisableHardwareOverlays(enabled)

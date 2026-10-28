@@ -569,6 +569,14 @@ fun GoogleAccountSignInOverlay(
                             .testTag("google_sign_in_webview"),
                         factory = { ctx ->
                             WebView(ctx).apply {
+                                GpuRenderController.applyWebViewGpuPipeline(
+                                    webView = this,
+                                    forceGpuRendering = true,
+                                    disableHardwareOverlays = true,
+                                    enableGpuRasterization = true,
+                                    disableGpuVsync = true,
+                                    disableFrameRateLimit = true
+                                )
                                 GoogleWebSessionManager.configureSharedSessionWebView(
                                     context = ctx,
                                     webView = this,

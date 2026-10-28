@@ -247,4 +247,75 @@ class ExampleRobolectricTest {
                 collectJob.cancel()
             }
         }
+
+    @Test
+    fun `disable gpu vsync and disable frame rate limit flags are active by default and toggleable`() =
+        kotlinx.coroutines.runBlocking {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val defaults = com.example.data.BrowserSettingsState()
+            assertTrue(defaults.disableGpuVsync)
+            assertTrue(defaults.disableFrameRateLimit)
+
+            val args = com.example.core.BrowserEngineInitializer.buildCommandLineArgs(
+                disableGpuVsync = true,
+                disableFrameRateLimit = true,
+                enableGpuRasterization = true
+            )
+            assertTrue(args.contains("--disable-gpu-vsync"))
+            assertTrue(args.contains("--disable-frame-rate-limit"))
+            assertTrue(args.contains("--enable-gpu-rasterization"))
+
+            com.example.core.BrowserEngineInitializer.initialize(
+                context = context,
+                disableGpuVsync = true,
+                disableFrameRateLimit = true,
+                enableGpuRasterization = true
+            )
+            assertTrue(
+                com.example.core.BrowserEngineInitializer.activeEngineFlags.contains(
+                    com.example.core.BrowserEngineInitializer.FLAG_DISABLE_GPU_VSYNC
+                )
+            )
+            assertTrue(
+                com.example.core.BrowserEngineInitializer.activeEngineFlags.contains(
+                    com.example.core.BrowserEngineInitializer.FLAG_DISABLE_FRAME_RATE_LIMIT
+                )
+            )
+
+            val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+            val vm = com.example.ui.BrowserViewModel(app)
+            val collectJob = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+                vm.uiState.collect {}
+            }
+            try {
+                var attempts = 0
+                while (!vm.uiState.value.isReady && attempts < 50) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(40)
+                    attempts++
+                }
+                assertTrue(vm.uiState.value.settings.disableGpuVsync)
+                assertTrue(vm.uiState.value.settings.disableFrameRateLimit)
+
+                vm.setDisableGpuVsync(false)
+                var toggleAttempts = 0
+                while (vm.uiState.value.settings.disableGpuVsync && toggleAttempts < 40) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(30)
+                    toggleAttempts++
+                }
+                assertFalse(vm.uiState.value.settings.disableGpuVsync)
+
+                vm.setDisableGpuVsync(true)
+                toggleAttempts = 0
+                while (!vm.uiState.value.settings.disableGpuVsync && toggleAttempts < 40) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(30)
+                    toggleAttempts++
+                }
+                assertTrue(vm.uiState.value.settings.disableGpuVsync)
+            } finally {
+                collectJob.cancel()
+            }
+        }
 }
