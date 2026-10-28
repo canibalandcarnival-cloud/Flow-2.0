@@ -153,9 +153,10 @@ fun GlassBrowserApp(
         }
     }
 
-    // Apply Force GPU Rendering & Disable Hardware Overlays live to Activity Window & DecorView
+    // Apply Force GPU Rendering, Enable GPU Rasterization & Disable Hardware Overlays live to Activity Window
     LaunchedEffect(
         uiState.settings.forceGpuRendering,
+        uiState.settings.enableGpuRasterization,
         uiState.settings.disableHardwareOverlays
     ) {
         val activity = context as? Activity
@@ -163,7 +164,8 @@ fun GlassBrowserApp(
             GpuRenderController.applyWindowGpuPipeline(
                 activity = activity,
                 forceGpuRendering = uiState.settings.forceGpuRendering,
-                disableHardwareOverlays = uiState.settings.disableHardwareOverlays
+                disableHardwareOverlays = uiState.settings.disableHardwareOverlays,
+                enableGpuRasterization = uiState.settings.enableGpuRasterization
             )
         }
     }
@@ -233,8 +235,8 @@ fun GlassBrowserApp(
     val wallpaperBlurredLayer = rememberGraphicsLayer()
     val sceneBlurredLayer = rememberGraphicsLayer()
 
-    val cardBlurPx = with(density) { 28.dp.toPx() }
-    val barBlurPx = with(density) { 34.dp.toPx() }
+    val cardBlurPx = with(density) { uiState.deviceProfile.cardBlurDp.dp.toPx() }
+    val barBlurPx = with(density) { uiState.deviceProfile.barBlurDp.dp.toPx() }
 
     LaunchedEffect(wallpaperBlurredLayer, sceneBlurredLayer, cardBlurPx, barBlurPx) {
         configureBlurLayer(wallpaperBlurredLayer, cardBlurPx)
@@ -284,7 +286,11 @@ fun GlassBrowserApp(
                     .background(style.glassBaseColor)
                     .onSizeChanged { rootSize = it }
                     .graphicsLayer {
-                        compositingStrategy = if (uiState.settings.disableHardwareOverlays || uiState.settings.forceGpuRendering) {
+                        compositingStrategy = if (
+                            uiState.settings.disableHardwareOverlays ||
+                            uiState.settings.forceGpuRendering ||
+                            uiState.settings.enableGpuRasterization
+                        ) {
                             CompositingStrategy.Offscreen
                         } else {
                             CompositingStrategy.Auto
@@ -328,7 +334,9 @@ fun GlassBrowserApp(
                                 url = activeTab.url,
                                 isPrivate = activeTab.isPrivate,
                                 forceGpuRendering = uiState.settings.forceGpuRendering,
+                                enableGpuRasterization = uiState.settings.enableGpuRasterization,
                                 disableHardwareOverlays = uiState.settings.disableHardwareOverlays,
+                                deviceProfile = uiState.deviceProfile,
                                 webCommand = webCommand,
                                 onConsumeCommand = viewModel::consumeWebCommand,
                                 onPageStarted = viewModel::onWebPageStarted,
@@ -555,6 +563,7 @@ fun GlassBrowserApp(
                         onToggleImmersiveOsMode = viewModel::setImmersiveOsMode,
                         onToggleHighRefresh = viewModel::setHighRefreshRateEnabled,
                         onToggleForceGpu = viewModel::setForceGpuRendering,
+                        onToggleGpuRasterization = viewModel::setEnableGpuRasterization,
                         onToggleDisableHwOverlays = viewModel::setDisableHardwareOverlays,
                         onToggleSfx = viewModel::setSfxEnabled,
                         onToggleHaptics = viewModel::setHapticsEnabled,

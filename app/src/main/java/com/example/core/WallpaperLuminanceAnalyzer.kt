@@ -48,16 +48,33 @@ object WallpaperLuminanceAnalyzer {
     suspend fun importWallpaperFromUri(context: Context, uri: Uri): Pair<File, Boolean>? =
         withContext(Dispatchers.IO) {
             try {
+                val profile = DeviceOptimizationManager.detectProfile(context)
+                val targetMaxPx = profile.maxWallpaperDimensionPx
                 val dir = File(context.filesDir, "wallpapers").apply { mkdirs() }
                 val destFile = File(dir, "custom_wp_${System.currentTimeMillis()}.jpg")
+
+                val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, boundsOpts)
+                }
+
+                val decodeOpts = BitmapFactory.Options().apply {
+                    inSampleSize = DeviceOptimizationManager.calculateInSampleSize(
+                        srcWidth = boundsOpts.outWidth,
+                        srcHeight = boundsOpts.outHeight,
+                        maxDimensionPx = targetMaxPx
+                    )
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+
                 val decoded = context.contentResolver.openInputStream(uri)?.use { stream ->
-                    BitmapFactory.decodeStream(stream)
+                    BitmapFactory.decodeStream(stream, null, decodeOpts)
                 } ?: return@withContext null
 
-                // Cap maximum dimension to 1600px for crisp full-screen display & fast GPU upload
+                // Cap maximum dimension to device-optimal size for crisp display & fast GPU upload
                 val maxSide = max(decoded.width, decoded.height)
-                val scaled = if (maxSide > 1600) {
-                    val ratio = 1600f / maxSide
+                val scaled = if (maxSide > targetMaxPx) {
+                    val ratio = targetMaxPx.toFloat() / maxSide
                     Bitmap.createScaledBitmap(
                         decoded,
                         (decoded.width * ratio).toInt().coerceAtLeast(1),
@@ -84,23 +101,45 @@ object WallpaperLuminanceAnalyzer {
         customFilePath: String?
     ): ResolvedWallpaper? = withContext(Dispatchers.Default) {
         try {
+            val profile = DeviceOptimizationManager.detectProfile(context)
+            val targetMaxPx = profile.maxWallpaperDimensionPx
+
             val rawBitmap: Bitmap = if (customFilePath != null && File(customFilePath).exists()) {
-                val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+                val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(customFilePath, boundsOpts)
+                val opts = BitmapFactory.Options().apply {
+                    inSampleSize = DeviceOptimizationManager.calculateInSampleSize(
+                        srcWidth = boundsOpts.outWidth,
+                        srcHeight = boundsOpts.outHeight,
+                        maxDimensionPx = targetMaxPx
+                    )
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
                 BitmapFactory.decodeFile(customFilePath, opts)
             } else {
                 val resId = presets.firstOrNull { it.id == wallpaperId }?.drawableRes
                     ?: R.drawable.wp_forest_canopy
-                val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+                val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeResource(context.resources, resId, boundsOpts)
+                val opts = BitmapFactory.Options().apply {
+                    inSampleSize = DeviceOptimizationManager.calculateInSampleSize(
+                        srcWidth = boundsOpts.outWidth,
+                        srcHeight = boundsOpts.outHeight,
+                        maxDimensionPx = targetMaxPx
+                    )
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
                 BitmapFactory.decodeResource(context.resources, resId, opts)
             } ?: return@withContext null
 
             val luminance = computeWallpaperLuminance(rawBitmap)
-            // Downscale 4x and apply smooth StackBlur for silk-grade frosted glass fallback & deep glow
-            val downW = (rawBitmap.width / 4).coerceAtLeast(48)
-            val downH = (rawBitmap.height / 4).coerceAtLeast(96)
+            // Downscale according to device profile and apply StackBlur for frosted glass fallback
+            val downFactor = profile.fallbackStackBlurDownscale.coerceAtLeast(2)
+            val downW = (rawBitmap.width / downFactor).coerceAtLeast(48)
+            val downH = (rawBitmap.height / downFactor).coerceAtLeast(96)
             val smallCopy = Bitmap.createScaledBitmap(rawBitmap, downW, downH, true)
                 .copy(Bitmap.Config.ARGB_8888, true)
-            val blurred = stackBlur(smallCopy, radius = 16)
+            val blurred = stackBlur(smallCopy, radius = profile.fallbackStackBlurRadius)
 
             ResolvedWallpaper(
                 id = wallpaperId,

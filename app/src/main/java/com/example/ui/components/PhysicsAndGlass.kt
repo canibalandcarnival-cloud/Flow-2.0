@@ -87,10 +87,21 @@ enum class GlassElevation {
     MODAL_OVERLAY
 }
 
+private class GlassGeometryCache {
+    var cachedSize: androidx.compose.ui.geometry.Size = androidx.compose.ui.geometry.Size.Unspecified
+    var cachedLayoutDirection: androidx.compose.ui.unit.LayoutDirection? = null
+    var cachedOutline: Outline? = null
+    val clipPath: Path = Path()
+    var sheenBrush: Brush? = null
+    var rimBrush: Brush? = null
+}
+
 /**
  * Renders an authentic frosted-glass container that dynamically samples & blurs the content
  * directly behind its screen coordinates, layered with strict monochrome White (Light Mode) or
  * Black (Dark Mode) translucency and a dual specular rim highlight.
+ *
+ * Uses zero-allocation cached geometry & brushes so scrolling stays locked at 60–360Hz on all devices.
  */
 @Composable
 fun FrostedGlassBox(
@@ -105,6 +116,7 @@ fun FrostedGlassBox(
     val style = LocalGlassStyle.current
     val backdrop = LocalSpatialBackdrop.current
     var coordsHolder by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val geometryCache = remember(shape, style) { GlassGeometryCache() }
 
     val tintAlpha = customTintAlpha ?: when (elevation) {
         GlassElevation.CARD -> style.cardTintAlpha
@@ -125,16 +137,37 @@ fun FrostedGlassBox(
                     Offset.Zero
                 }
 
-                val outline = shape.createOutline(size, layoutDirection, this)
-                val clipPath = Path().apply {
-                    when (outline) {
-                        is Outline.Rectangle -> addRect(outline.rect)
-                        is Outline.Rounded -> addRoundRect(outline.roundRect)
-                        is Outline.Generic -> addPath(outline.path)
+                if (geometryCache.cachedSize != size ||
+                    geometryCache.cachedLayoutDirection != layoutDirection ||
+                    geometryCache.cachedOutline == null
+                ) {
+                    val created = shape.createOutline(size, layoutDirection, this)
+                    geometryCache.cachedSize = size
+                    geometryCache.cachedLayoutDirection = layoutDirection
+                    geometryCache.cachedOutline = created
+                    geometryCache.clipPath.rewind()
+                    when (created) {
+                        is Outline.Rectangle -> geometryCache.clipPath.addRect(created.rect)
+                        is Outline.Rounded -> geometryCache.clipPath.addRoundRect(created.roundRect)
+                        is Outline.Generic -> geometryCache.clipPath.addPath(created.path)
                     }
+                    geometryCache.sheenBrush = Brush.verticalGradient(
+                        colors = listOf(style.topSheen, Color.Transparent),
+                        startY = 0f,
+                        endY = (size.height * 0.55f).coerceAtLeast(1f)
+                    )
+                    geometryCache.rimBrush = Brush.linearGradient(
+                        colors = listOf(style.rimTopLeft, style.rimBottomRight),
+                        start = Offset.Zero,
+                        end = Offset(size.width.coerceAtLeast(1f), size.height.coerceAtLeast(1f))
+                    )
                 }
 
-                clipPath(clipPath) {
+                val outline = geometryCache.cachedOutline ?: return@drawBehind
+                val sheen = geometryCache.sheenBrush
+                val rim = geometryCache.rimBrush
+
+                clipPath(geometryCache.clipPath) {
                     val activeLayer = if (useLiveSceneBackdrop) {
                         backdrop.sceneBlurredLayer ?: backdrop.wallpaperBlurredLayer
                     } else {
@@ -172,26 +205,20 @@ fun FrostedGlassBox(
                     drawRect(color = style.glassBaseColor.copy(alpha = tintAlpha))
 
                     // Subtle top optical refraction sheen
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(style.topSheen, Color.Transparent),
-                            startY = 0f,
-                            endY = size.height * 0.55f
-                        )
-                    )
+                    if (sheen != null) {
+                        drawRect(brush = sheen)
+                    }
                 }
 
                 // Specular 1dp glass edge rim highlight
-                val strokeWidthPx = 1.dp.toPx()
-                drawOutline(
-                    outline = outline,
-                    brush = Brush.linearGradient(
-                        colors = listOf(style.rimTopLeft, style.rimBottomRight),
-                        start = Offset.Zero,
-                        end = Offset(size.width, size.height)
-                    ),
-                    style = Stroke(width = strokeWidthPx)
-                )
+                if (rim != null) {
+                    val strokeWidthPx = 1.dp.toPx()
+                    drawOutline(
+                        outline = outline,
+                        brush = rim,
+                        style = Stroke(width = strokeWidthPx)
+                    )
+                }
             },
         content = content
     )

@@ -46,6 +46,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.core.DeviceOptimizationManager
 import com.example.data.BrowserRepository
 import com.example.ui.TopHubSection
 import com.example.ui.components.EyeglassesIcon
@@ -69,16 +70,17 @@ fun TopSegmentedGlassBar(
     val sections = TopHubSection.entries
     val selectedIndex = sections.indexOf(activeSection).coerceAtLeast(0)
 
-    Box(
+    BoxWithConstraints(
         contentAlignment = Alignment.Center,
         modifier = modifier.fillMaxWidth()
     ) {
+        val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
         FrostedGlassBox(
             shape = RoundedCornerShape(50),
             elevation = GlassElevation.FLOATING_BAR,
             useLiveSceneBackdrop = true,
             modifier = Modifier
-                .widthIn(max = 520.dp)
+                .widthIn(max = metrics.chromeBarMaxWidth)
                 .fillMaxWidth()
                 .height(48.dp)
                 .testTag("top_segmented_glass_bar")
@@ -191,15 +193,16 @@ fun BottomBrowserGlassBar(
         label = "webProgress"
     )
 
-    Box(
+    BoxWithConstraints(
         contentAlignment = Alignment.Center,
         modifier = modifier.fillMaxWidth()
     ) {
+        val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (metrics.isUltraCompactPhone) 8.dp else 10.dp),
             modifier = Modifier
-                .widthIn(max = 560.dp)
+                .widthIn(max = metrics.chromeBarMaxWidth)
                 .fillMaxWidth()
         ) {
             // Left Circular Frosted Back Button
@@ -208,7 +211,7 @@ fun BottomBrowserGlassBar(
                 elevation = GlassElevation.FLOATING_BAR,
                 useLiveSceneBackdrop = true,
                 modifier = Modifier
-                    .size(50.dp)
+                    .size(metrics.floatingActionSize)
                     .testTag("back_glass_button")
                     .bouncyClickable(
                         pressedScale = 0.88f,
@@ -313,7 +316,7 @@ fun BottomBrowserGlassBar(
                 elevation = GlassElevation.FLOATING_BAR,
                 useLiveSceneBackdrop = true,
                 modifier = Modifier
-                    .size(50.dp)
+                    .size(metrics.floatingActionSize)
                     .testTag("tabs_switcher_button")
                     .bouncyClickable(
                         pressedScale = 0.88f,

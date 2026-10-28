@@ -65,6 +65,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.core.DeviceOptimizationManager
 import com.example.data.BrowserTabEntity
 import com.example.data.FavoriteSiteEntity
 import com.example.ui.BrowserUiState
@@ -151,22 +152,24 @@ fun TabSwitcherOverlay(
             .fillMaxSize()
             .testTag("tab_switcher_overlay")
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            // Scrollable 2-Column Grid of Tab Cards & 2x2 Tab Group Cards
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
+
+            // Adaptive Multi-Column Grid of Tab Cards & 2x2 Tab Group Cards (2 on handsets, 3 on foldables/landscape, 4 on tablets)
             LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
+                columns = GridCells.Fixed(metrics.tabGridColumns),
                 flingBehavior = momentumFling,
                 contentPadding = PaddingValues(
                     top = if (uiState.isTabSearchActive || uiState.activeTabGroupFilter != null) 142.dp else 92.dp,
                     bottom = 118.dp,
-                    start = 18.dp,
-                    end = 18.dp
+                    start = metrics.horizontalPadding,
+                    end = metrics.horizontalPadding
                 ),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (metrics.isUltraCompactPhone) 12.dp else 16.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .widthIn(max = 620.dp)
+                    .widthIn(max = metrics.contentMaxWidth)
                     .fillMaxSize()
                     .testTag("tabs_grid")
                     .rubberBandOverscroll(onEdgeHit = onEdgeBounce)
@@ -198,10 +201,10 @@ fun TabSwitcherOverlay(
             Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .widthIn(max = 620.dp)
+                    .widthIn(max = metrics.contentMaxWidth)
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 18.dp, vertical = 10.dp)
+                    .padding(horizontal = metrics.horizontalPadding, vertical = 10.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -381,10 +384,10 @@ fun TabSwitcherOverlay(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .widthIn(max = 620.dp)
+                    .widthIn(max = metrics.contentMaxWidth)
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 14.dp)
+                    .padding(horizontal = metrics.horizontalPadding, vertical = 14.dp)
             ) {
                 // Left Circular Frosted '+' New Tab Button
                 FrostedGlassBox(
@@ -392,7 +395,7 @@ fun TabSwitcherOverlay(
                     elevation = GlassElevation.FLOATING_BAR,
                     useLiveSceneBackdrop = true,
                     modifier = Modifier
-                        .size(50.dp)
+                        .size(metrics.floatingActionSize)
                         .testTag("new_tab_button")
                         .bouncyClickable(
                             pressedScale = 0.88f,
@@ -414,7 +417,7 @@ fun TabSwitcherOverlay(
                     elevation = GlassElevation.FLOATING_BAR,
                     useLiveSceneBackdrop = true,
                     modifier = Modifier
-                        .width(204.dp)
+                        .width(metrics.privacyPillWidth)
                         .height(48.dp)
                         .testTag("privacy_mode_switcher")
                 ) {
@@ -496,7 +499,7 @@ fun TabSwitcherOverlay(
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(50.dp)
+                        .size(metrics.floatingActionSize)
                         .clip(CircleShape)
                         .background(style.solidActionFill)
                         .testTag("done_tabs_button")

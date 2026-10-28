@@ -22,6 +22,7 @@ data class BrowserSettingsState(
     val hapticsEnabled: Boolean = true,
     val highRefreshRateEnabled: Boolean = true,
     val forceGpuRendering: Boolean = true,
+    val enableGpuRasterization: Boolean = true,
     val disableHardwareOverlays: Boolean = true,
     val immersiveOsMode: Boolean = true,
     val activeTabId: Long = -1L,
@@ -37,6 +38,7 @@ class BrowserPreferences(private val context: Context) {
         val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
         val HIGH_REFRESH_ENABLED = booleanPreferencesKey("high_refresh_enabled")
         val FORCE_GPU_RENDERING = booleanPreferencesKey("force_gpu_rendering")
+        val ENABLE_GPU_RASTERIZATION = booleanPreferencesKey("enable_gpu_rasterization")
         val DISABLE_HW_OVERLAYS = booleanPreferencesKey("disable_hw_overlays")
         val IMMERSIVE_OS_MODE = booleanPreferencesKey("immersive_os_mode")
         val ACTIVE_TAB_ID = longPreferencesKey("active_tab_id")
@@ -51,6 +53,7 @@ class BrowserPreferences(private val context: Context) {
             hapticsEnabled = prefs[Keys.HAPTICS_ENABLED] ?: true,
             highRefreshRateEnabled = prefs[Keys.HIGH_REFRESH_ENABLED] ?: true,
             forceGpuRendering = prefs[Keys.FORCE_GPU_RENDERING] ?: true,
+            enableGpuRasterization = prefs[Keys.ENABLE_GPU_RASTERIZATION] ?: true,
             disableHardwareOverlays = prefs[Keys.DISABLE_HW_OVERLAYS] ?: true,
             immersiveOsMode = prefs[Keys.IMMERSIVE_OS_MODE] ?: true,
             activeTabId = prefs[Keys.ACTIVE_TAB_ID] ?: -1L,
@@ -80,6 +83,10 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setForceGpuRendering(enabled: Boolean) {
         context.browserDataStore.edit { it[Keys.FORCE_GPU_RENDERING] = enabled }
+    }
+
+    suspend fun setEnableGpuRasterization(enabled: Boolean) {
+        context.browserDataStore.edit { it[Keys.ENABLE_GPU_RASTERIZATION] = enabled }
     }
 
     suspend fun setDisableHardwareOverlays(enabled: Boolean) {

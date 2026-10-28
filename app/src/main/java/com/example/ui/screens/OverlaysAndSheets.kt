@@ -76,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.R
+import com.example.core.DeviceOptimizationManager
 import com.example.core.DisplayRefreshRateManager
 import com.example.core.OsShellManager
 import com.example.core.WallpaperLuminanceAnalyzer
@@ -371,6 +372,7 @@ fun WallpaperAndSettingsSheet(
     onToggleImmersiveOsMode: (Boolean) -> Unit,
     onToggleHighRefresh: (Boolean) -> Unit,
     onToggleForceGpu: (Boolean) -> Unit,
+    onToggleGpuRasterization: (Boolean) -> Unit,
     onToggleDisableHwOverlays: (Boolean) -> Unit,
     onToggleSfx: (Boolean) -> Unit,
     onToggleHaptics: (Boolean) -> Unit,
@@ -382,7 +384,7 @@ fun WallpaperAndSettingsSheet(
     val liveFps by DisplayRefreshRateManager.observeLiveFps().collectAsState(initial = displayCapability.activeHz)
     val momentumFling = rememberPhysicalMomentumFlingBehavior()
 
-    Box(
+    BoxWithConstraints(
         contentAlignment = Alignment.BottomCenter,
         modifier = Modifier
             .fillMaxSize()
@@ -393,12 +395,13 @@ fun WallpaperAndSettingsSheet(
                 onClick = onDismiss
             )
     ) {
+        val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
         FrostedGlassBox(
             shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
             elevation = GlassElevation.MODAL_OVERLAY,
             useLiveSceneBackdrop = true,
             modifier = Modifier
-                .widthIn(max = 600.dp)
+                .widthIn(max = metrics.sheetMaxWidth)
                 .fillMaxWidth()
                 .testTag("settings_wallpaper_sheet")
                 .clickable(
@@ -780,7 +783,7 @@ fun WallpaperAndSettingsSheet(
                     }
                 }
 
-                // 3. Physics, 360Hz Engine, GPU, SFX & Haptics
+                // 3. Physics, 360Hz Engine, GPU Rasterization & Compositor, SFX & Haptics
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
@@ -788,11 +791,22 @@ fun WallpaperAndSettingsSheet(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = stringResource(R.string.motion_and_feedback_title),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = style.contentPrimary
-                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.motion_and_feedback_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = style.contentPrimary
+                                )
+                                Text(
+                                    text = stringResource(
+                                        R.string.device_optimization_badge_format,
+                                        uiState.deviceProfile.tierLabel,
+                                        uiState.deviceProfile.cpuCores
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = style.contentSecondary
+                                )
+                            }
                             Text(
                                 text = "${liveFps} FPS • Max ${displayCapability.engineTargetHz}Hz",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
@@ -806,6 +820,13 @@ fun WallpaperAndSettingsSheet(
                             checked = uiState.settings.highRefreshRateEnabled,
                             onCheckedChange = onToggleHighRefresh,
                             tag = "toggle_360hz"
+                        )
+                        MonochromeToggleRow(
+                            title = stringResource(R.string.enable_gpu_rasterization_label),
+                            subtitle = stringResource(R.string.enable_gpu_rasterization_subtitle),
+                            checked = uiState.settings.enableGpuRasterization,
+                            onCheckedChange = onToggleGpuRasterization,
+                            tag = "toggle_gpu_rasterization"
                         )
                         MonochromeToggleRow(
                             title = stringResource(R.string.force_gpu_rendering_label),

@@ -405,6 +405,7 @@ class BrowserRepository(
     suspend fun setHapticsEnabled(enabled: Boolean) = preferences.setHapticsEnabled(enabled)
     suspend fun setHighRefreshRateEnabled(enabled: Boolean) = preferences.setHighRefreshRateEnabled(enabled)
     suspend fun setForceGpuRendering(enabled: Boolean) = preferences.setForceGpuRendering(enabled)
+    suspend fun setEnableGpuRasterization(enabled: Boolean) = preferences.setEnableGpuRasterization(enabled)
     suspend fun setDisableHardwareOverlays(enabled: Boolean) = preferences.setDisableHardwareOverlays(enabled)
     suspend fun setImmersiveOsMode(enabled: Boolean) = preferences.setImmersiveOsMode(enabled)
     suspend fun setPrivateMode(isPrivate: Boolean, fallbackTabId: Long) =

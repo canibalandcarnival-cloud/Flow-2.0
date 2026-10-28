@@ -31,8 +31,11 @@
     <string name="refresh_rate_360_label">Up to 360Hz High Refresh Engine</string>
     <string name="force_gpu_rendering_label">Force GPU Rendering</string>
     <string name="force_gpu_rendering_subtitle">Force hardware GPU acceleration for 2D drawing &amp; WebView tiles</string>
+    <string name="enable_gpu_rasterization_label">Enable GPU Rasterization</string>
+    <string name="enable_gpu_rasterization_subtitle">Rasterize web vector paths, text &amp; offscreen scroll tiles directly on GPU</string>
     <string name="disable_hw_overlays_label">Disable Hardware Overlays</string>
     <string name="disable_hw_overlays_subtitle">Always use GPU for unified screen compositing</string>
+    <string name="device_optimization_badge_format">%1$s • %2$d Cores</string>
     <string name="sfx_feedback_label">Glass Sound Effects (SFX)</string>
     <string name="haptic_feedback_label">Tactile Haptic Feedback</string>
     <string name="new_tab_group_title">New Tab Group</string>

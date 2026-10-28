@@ -31,6 +31,10 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.core.DeviceOptimizationManager
 import com.example.core.GpuRenderController
 import com.example.ui.BrowserViewModel
 import com.example.ui.theme.LocalGlassStyle
@@ -41,8 +45,8 @@ import kotlin.math.pow
 
 /**
  * Full-bleed live WebView surface (extending edge-to-edge to the bottom with no wallpaper behind or below),
- * supporting dynamic Force GPU Rendering, Disable Hardware Overlays, elastic rubber-band overscroll,
- * and automatic webpage snapshot capture.
+ * supporting dynamic Force GPU Rendering, Enable GPU Rasterization, Disable Hardware Overlays,
+ * lifecycle-aware CPU/GPU power management, device-tuned snapshot capture, and elastic rubber-band overscroll.
  */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
@@ -51,7 +55,9 @@ fun WebBrowserView(
     url: String,
     isPrivate: Boolean,
     forceGpuRendering: Boolean,
+    enableGpuRasterization: Boolean,
     disableHardwareOverlays: Boolean,
+    deviceProfile: DeviceOptimizationManager.DeviceProfile,
     webCommand: BrowserViewModel.WebCommand?,
     onConsumeCommand: () -> Unit,
     onPageStarted: (tabId: Long, url: String) -> Unit,
@@ -69,17 +75,41 @@ fun WebBrowserView(
     modifier: Modifier = Modifier
 ) {
     val style = LocalGlassStyle.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val rubberY = remember { Animatable(0f) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
     val currentTabId by rememberUpdatedState(tabId)
     val currentPrivate by rememberUpdatedState(isPrivate)
+    val currentGpuRaster by rememberUpdatedState(enableGpuRasterization)
+    val currentDeviceProfile by rememberUpdatedState(deviceProfile)
     val onStartedLatest by rememberUpdatedState(onPageStarted)
     val onProgressLatest by rememberUpdatedState(onProgressChanged)
     val onFinishedLatest by rememberUpdatedState(onPageFinished)
     val onSnapshotLatest by rememberUpdatedState(onSnapshotCaptured)
     val onBounceLatest by rememberUpdatedState(onEdgeBounce)
+
+    // Lifecycle-aware pause/resume so inactive/backgrounded sessions conserve CPU & battery on all devices
+    DisposableEffect(lifecycleOwner, webViewRef) {
+        val observer = LifecycleEventObserver { _, event ->
+            val wv = webViewRef ?: return@LifecycleEventObserver
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    wv.onResume()
+                    wv.resumeTimers()
+                }
+                Lifecycle.Event.ON_PAUSE -> {
+                    wv.onPause()
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     // Execute explicit navigation / reload / back / forward commands from ViewModel
     LaunchedEffect(webCommand, webViewRef) {
@@ -98,13 +128,18 @@ fun WebBrowserView(
         onConsumeCommand()
     }
 
-    // Re-apply GPU rendering & hardware overlay settings whenever toggled in Settings
-    LaunchedEffect(webViewRef, forceGpuRendering, disableHardwareOverlays) {
+    // Re-apply GPU rendering, GPU rasterization & hardware overlay settings live whenever toggled
+    LaunchedEffect(webViewRef, forceGpuRendering, enableGpuRasterization, disableHardwareOverlays) {
         val wv = webViewRef ?: return@LaunchedEffect
         GpuRenderController.applyWebViewGpuPipeline(
             webView = wv,
             forceGpuRendering = forceGpuRendering,
-            disableHardwareOverlays = disableHardwareOverlays
+            disableHardwareOverlays = disableHardwareOverlays,
+            enableGpuRasterization = enableGpuRasterization
+        )
+        GpuRenderController.injectPageGpuRasterizationScript(
+            webView = wv,
+            enableGpuRasterization = enableGpuRasterization
         )
     }
 
@@ -112,7 +147,7 @@ fun WebBrowserView(
     LaunchedEffect(tabId, url) {
         delay(850L)
         webViewRef?.let { wv ->
-            captureWebViewThumbnail(wv)?.let { bmp ->
+            captureWebViewThumbnail(wv, currentDeviceProfile)?.let { bmp ->
                 onSnapshotLatest(tabId, bmp)
             }
         }
@@ -140,7 +175,7 @@ fun WebBrowserView(
                 .testTag("active_webview")
                 .graphicsLayer {
                     translationY = rubberY.value
-                    compositingStrategy = if (forceGpuRendering || disableHardwareOverlays) {
+                    compositingStrategy = if (forceGpuRendering || disableHardwareOverlays || enableGpuRasterization) {
                         CompositingStrategy.Offscreen
                     } else {
                         CompositingStrategy.Auto
@@ -151,7 +186,8 @@ fun WebBrowserView(
                     GpuRenderController.applyWebViewGpuPipeline(
                         webView = this,
                         forceGpuRendering = forceGpuRendering,
-                        disableHardwareOverlays = disableHardwareOverlays
+                        disableHardwareOverlays = disableHardwareOverlays,
+                        enableGpuRasterization = enableGpuRasterization
                     )
                     isVerticalScrollBarEnabled = true
                     overScrollMode = View.OVER_SCROLL_NEVER
@@ -164,6 +200,7 @@ fun WebBrowserView(
                         setSupportZoom(true)
                         builtInZoomControls = true
                         displayZoomControls = false
+                        mediaPlaybackRequiresUserGesture = false
                         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                         cacheMode = if (isPrivate) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
                     }
@@ -213,7 +250,7 @@ fun WebBrowserView(
                                 // Refresh webpage snapshot for live frosted bottom bar & tab preview
                                 scope.launch {
                                     delay(240L)
-                                    captureWebViewThumbnail(wv)?.let { bmp ->
+                                    captureWebViewThumbnail(wv, currentDeviceProfile)?.let { bmp ->
                                         onSnapshotLatest(currentTabId, bmp)
                                     }
                                 }
@@ -239,10 +276,9 @@ fun WebBrowserView(
                             super.onPageFinished(view, finishedUrl)
                             val wv = view ?: return
                             val finalUrl = finishedUrl ?: wv.url.orEmpty()
-                            // Ensure bottom webpage content can scroll comfortably above the floating glass bar
-                            wv.evaluateJavascript(
-                                "(function(){if(document&&document.body){document.body.style.paddingBottom='88px';}})();",
-                                null
+                            GpuRenderController.injectPageGpuRasterizationScript(
+                                webView = wv,
+                                enableGpuRasterization = currentGpuRaster
                             )
                             onFinishedLatest(
                                 currentTabId,
@@ -252,7 +288,7 @@ fun WebBrowserView(
                                 wv.canGoForward(),
                                 currentPrivate
                             )
-                            captureWebViewThumbnail(wv)?.let { bmp ->
+                            captureWebViewThumbnail(wv, currentDeviceProfile)?.let { bmp ->
                                 onSnapshotLatest(currentTabId, bmp)
                             }
                         }
@@ -276,7 +312,8 @@ fun WebBrowserView(
                 GpuRenderController.applyWebViewGpuPipeline(
                     webView = wv,
                     forceGpuRendering = forceGpuRendering,
-                    disableHardwareOverlays = disableHardwareOverlays
+                    disableHardwareOverlays = disableHardwareOverlays,
+                    enableGpuRasterization = enableGpuRasterization
                 )
                 if (url.isNotBlank() && wv.url != url && wv.originalUrl != url) {
                     wv.loadUrl(url)
@@ -286,15 +323,23 @@ fun WebBrowserView(
     }
 }
 
-private fun captureWebViewThumbnail(webView: WebView): Bitmap? {
+private fun captureWebViewThumbnail(
+    webView: WebView,
+    deviceProfile: DeviceOptimizationManager.DeviceProfile
+): Bitmap? {
     return try {
         val w = webView.width
         val h = webView.height
         if (w <= 16 || h <= 16) return null
-        val scale = 0.35f
+        val scale = deviceProfile.snapshotScale
         val bmpW = (w * scale).toInt().coerceAtLeast(64)
         val bmpH = (h * scale).toInt().coerceAtLeast(84)
-        val bmp = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
+        val config = if (deviceProfile.preferRgb565Snapshots) {
+            Bitmap.Config.RGB_565
+        } else {
+            Bitmap.Config.ARGB_8888
+        }
+        val bmp = Bitmap.createBitmap(bmpW, bmpH, config)
         val canvas = Canvas(bmp)
         canvas.scale(scale, scale)
         webView.draw(canvas)

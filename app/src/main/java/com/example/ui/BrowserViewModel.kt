@@ -8,6 +8,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import android.content.ComponentCallbacks2
+import com.example.core.DeviceOptimizationManager
 import com.example.core.FeedbackManager
 import com.example.core.ResolvedWallpaper
 import com.example.core.WallpaperLuminanceAnalyzer
@@ -45,6 +47,7 @@ data class TabGroupSummary(
 data class BrowserUiState(
     val isReady: Boolean = false,
     val settings: BrowserSettingsState = BrowserSettingsState(),
+    val deviceProfile: DeviceOptimizationManager.DeviceProfile = DeviceOptimizationManager.DeviceProfile(),
     val resolvedWallpaper: ResolvedWallpaper? = null,
     val favorites: List<FavoriteSiteEntity> = emptyList(),
     val readingList: List<ReadingListItemEntity> = emptyList(),
@@ -98,10 +101,13 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val database = BrowserDatabase.getInstance(application)
     private val preferences = BrowserPreferences(application)
     private val repository = BrowserRepository(database.browserDao(), preferences)
+    val deviceProfile: DeviceOptimizationManager.DeviceProfile =
+        DeviceOptimizationManager.detectProfile(application)
     val feedback = FeedbackManager(application)
 
-    // In-memory live webpage thumbnail snapshots keyed by tabId
+    // In-memory live webpage thumbnail snapshots keyed by tabId, bounded by device RAM tier
     val tabSnapshots = mutableStateMapOf<Long, ImageBitmap>()
+    private val snapshotLruOrder = LinkedHashSet<Long>()
 
     // Trigger counter for WebView actions (reload / back / forward)
     private val _webCommand = MutableStateFlow<WebCommand?>(null)
@@ -171,6 +177,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         BrowserUiState(
             isReady = isSeeded,
             settings = settings,
+            deviceProfile = deviceProfile,
             resolvedWallpaper = resolvedWp,
             favorites = favorites,
             readingList = readingList,
@@ -421,7 +428,35 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateTabSnapshot(tabId: Long, bitmap: Bitmap) {
+        snapshotLruOrder.remove(tabId)
+        snapshotLruOrder.add(tabId)
         tabSnapshots[tabId] = bitmap.asImageBitmap()
+
+        val maxCached = deviceProfile.maxCachedTabSnapshots.coerceAtLeast(2)
+        val activeId = uiState.value.activeTab?.id
+        while (tabSnapshots.size > maxCached && snapshotLruOrder.isNotEmpty()) {
+            val evictCandidate = snapshotLruOrder.firstOrNull { it != activeId && it != tabId }
+                ?: break
+            snapshotLruOrder.remove(evictCandidate)
+            tabSnapshots.remove(evictCandidate)
+        }
+    }
+
+    /**
+     * Releases background tab thumbnail bitmaps when Android signals low-memory conditions
+     * so low-RAM devices stay responsive without dropping the active session.
+     */
+    fun trimMemory(level: Int) {
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
+            level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
+        ) {
+            val activeId = uiState.value.activeTab?.id
+            val toRemove = tabSnapshots.keys.filter { it != activeId }
+            toRemove.forEach { id ->
+                tabSnapshots.remove(id)
+                snapshotLruOrder.remove(id)
+            }
+        }
     }
 
     fun createNewTab(groupName: String? = null) {
@@ -458,6 +493,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             val state = uiState.value
             val remaining = state.allTabs.filter { it.id != tab.id && it.isPrivate == tab.isPrivate }
             tabSnapshots.remove(tab.id)
+            snapshotLruOrder.remove(tab.id)
             repository.closeTab(tab.id)
             if (remaining.isEmpty()) {
                 repository.createNewTab(isPrivate = tab.isPrivate, initialUrl = "")
@@ -588,6 +624,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             repository.setForceGpuRendering(enabled)
             showToast(if (enabled) "Force GPU Rendering enabled" else "Force GPU Rendering off")
+        }
+    }
+
+    fun setEnableGpuRasterization(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        viewModelScope.launch {
+            repository.setEnableGpuRasterization(enabled)
+            showToast(if (enabled) "GPU Rasterization enabled" else "GPU Rasterization off")
         }
     }
 

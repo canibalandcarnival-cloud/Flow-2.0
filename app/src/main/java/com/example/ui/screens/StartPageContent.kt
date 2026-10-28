@@ -10,6 +10,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.core.DeviceOptimizationManager
 import com.example.data.BookmarkEntity
 import com.example.data.FavoriteSiteEntity
 import com.example.data.HistoryEntryEntity
@@ -171,24 +173,29 @@ private fun StartPageSectionList(
 ) {
     val style = LocalGlassStyle.current
     val momentumFling = rememberPhysicalMomentumFlingBehavior()
-    val visibleFavorites = if (showAllFavorites) favorites else favorites.take(8)
-    val visibleReading = if (showAllReadingList) readingList else readingList.take(3)
 
-    Box(
+    BoxWithConstraints(
         contentAlignment = Alignment.TopCenter,
         modifier = Modifier.fillMaxSize()
     ) {
+        val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
+        val favCols = metrics.favoritesColumns
+        val defaultFavCount = favCols * 2
+        val defaultReadingCount = if (metrics.readingListColumns == 2) 4 else 3
+        val visibleFavorites = if (showAllFavorites) favorites else favorites.take(defaultFavCount)
+        val visibleReading = if (showAllReadingList) readingList else readingList.take(defaultReadingCount)
+
         LazyColumn(
             flingBehavior = momentumFling,
             contentPadding = PaddingValues(
                 top = topContentPadding,
                 bottom = bottomContentPadding,
-                start = 18.dp,
-                end = 18.dp
+                start = metrics.horizontalPadding,
+                end = metrics.horizontalPadding
             ),
             verticalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier
-                .widthIn(max = 600.dp)
+                .widthIn(max = metrics.contentMaxWidth)
                 .fillMaxSize()
                 .testTag("start_page_scroll_list")
                 .rubberBandOverscroll(onEdgeHit = onEdgeBounce)
@@ -209,9 +216,9 @@ private fun StartPageSectionList(
                 )
             }
 
-            // Favorites 4-column squircle grid with adaptive site labels
+            // Adaptive Favorites squircle grid (4 columns on handsets, 6 on foldables/landscape/tablets)
             item(key = "favorites_grid") {
-                val rows = visibleFavorites.chunked(4)
+                val rows = visibleFavorites.chunked(favCols)
                 Column(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier
@@ -222,14 +229,15 @@ private fun StartPageSectionList(
                 ) {
                     rows.forEach { rowSites ->
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(if (metrics.isUltraCompactPhone) 8.dp else 12.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            for (col in 0 until 4) {
+                            for (col in 0 until favCols) {
                                 val site = rowSites.getOrNull(col)
                                 if (site != null) {
                                     FavoriteGridCell(
                                         site = site,
+                                        iconSize = metrics.favoriteIconSize,
                                         labelColor = favoriteLabelColor,
                                         onClick = { onOpenUrl(site.url) },
                                         modifier = Modifier.weight(1f)
@@ -264,15 +272,43 @@ private fun StartPageSectionList(
                 )
             }
 
-            // Reading List Frosted Glass Cards
-            items(
-                items = visibleReading,
-                key = { "reading_${it.id}" }
-            ) { article ->
-                ReadingListGlassCard(
-                    article = article,
-                    onClick = { onOpenUrl(article.url) }
-                )
+            // Reading List Frosted Glass Cards (1 column on handsets, 2-column canonical grid on wide foldables/tablets)
+            if (metrics.readingListColumns == 2) {
+                val readingPairs = visibleReading.chunked(2)
+                items(
+                    items = readingPairs,
+                    key = { pair -> "reading_row_${pair.first().id}" }
+                ) { pair ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        ReadingListGlassCard(
+                            article = pair[0],
+                            onClick = { onOpenUrl(pair[0].url) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (pair.size > 1) {
+                            ReadingListGlassCard(
+                                article = pair[1],
+                                onClick = { onOpenUrl(pair[1].url) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            } else {
+                items(
+                    items = visibleReading,
+                    key = { "reading_${it.id}" }
+                ) { article ->
+                    ReadingListGlassCard(
+                        article = article,
+                        onClick = { onOpenUrl(article.url) }
+                    )
+                }
             }
 
             // Customize & Wallpaper Frosted Pill at bottom of Start Page
@@ -377,6 +413,7 @@ private fun SectionHeaderRow(
 @Composable
 private fun FavoriteGridCell(
     site: FavoriteSiteEntity,
+    iconSize: Dp,
     labelColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -393,7 +430,7 @@ private fun FavoriteGridCell(
     ) {
         FavoriteSquircleIcon(
             site = site,
-            size = 70.dp
+            size = iconSize
         )
         Spacer(modifier = Modifier.height(7.dp))
         Text(
@@ -509,18 +546,19 @@ private fun BookmarksSectionList(
     val style = LocalGlassStyle.current
     val momentumFling = rememberPhysicalMomentumFlingBehavior()
 
-    Box(contentAlignment = Alignment.TopCenter, modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(contentAlignment = Alignment.TopCenter, modifier = Modifier.fillMaxSize()) {
+        val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
         LazyColumn(
             flingBehavior = momentumFling,
             contentPadding = PaddingValues(
                 top = topContentPadding,
                 bottom = bottomContentPadding,
-                start = 18.dp,
-                end = 18.dp
+                start = metrics.horizontalPadding,
+                end = metrics.horizontalPadding
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier
-                .widthIn(max = 600.dp)
+                .widthIn(max = metrics.contentMaxWidth)
                 .fillMaxSize()
                 .rubberBandOverscroll(onEdgeHit = onEdgeBounce)
         ) {
@@ -634,18 +672,19 @@ private fun FullReadingListSection(
     val style = LocalGlassStyle.current
     val momentumFling = rememberPhysicalMomentumFlingBehavior()
 
-    Box(contentAlignment = Alignment.TopCenter, modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(contentAlignment = Alignment.TopCenter, modifier = Modifier.fillMaxSize()) {
+        val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
         LazyColumn(
             flingBehavior = momentumFling,
             contentPadding = PaddingValues(
                 top = topContentPadding,
                 bottom = bottomContentPadding,
-                start = 18.dp,
-                end = 18.dp
+                start = metrics.horizontalPadding,
+                end = metrics.horizontalPadding
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier
-                .widthIn(max = 600.dp)
+                .widthIn(max = metrics.contentMaxWidth)
                 .fillMaxSize()
                 .rubberBandOverscroll(onEdgeHit = onEdgeBounce)
         ) {
@@ -693,18 +732,19 @@ private fun HistorySectionList(
     val momentumFling = rememberPhysicalMomentumFlingBehavior()
     val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault())
 
-    Box(contentAlignment = Alignment.TopCenter, modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(contentAlignment = Alignment.TopCenter, modifier = Modifier.fillMaxSize()) {
+        val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
         LazyColumn(
             flingBehavior = momentumFling,
             contentPadding = PaddingValues(
                 top = topContentPadding,
                 bottom = bottomContentPadding,
-                start = 18.dp,
-                end = 18.dp
+                start = metrics.horizontalPadding,
+                end = metrics.horizontalPadding
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier
-                .widthIn(max = 600.dp)
+                .widthIn(max = metrics.contentMaxWidth)
                 .fillMaxSize()
                 .rubberBandOverscroll(onEdgeHit = onEdgeBounce)
         ) {

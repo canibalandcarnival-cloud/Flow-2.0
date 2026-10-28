@@ -3,7 +3,11 @@ package com.example
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.webkit.WebView
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
+import com.example.core.DeviceOptimizationManager
+import com.example.core.GpuRenderController
 import com.example.core.WallpaperLuminanceAnalyzer
 import com.example.data.BrowserRepository
 import org.junit.Assert.assertEquals
@@ -48,5 +52,54 @@ class ExampleRobolectricTest {
             BrowserRepository.normalizeUrlOrSearch("minimalist ceramics")
                 .startsWith("https://duckduckgo.com/?q=")
         )
+    }
+
+    @Test
+    fun `device optimization scales across compact phones foldables and tablets`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val profile = DeviceOptimizationManager.detectProfile(context)
+        assertTrue(profile.maxCachedTabSnapshots >= 3)
+
+        val smallPhone = DeviceOptimizationManager.computeAdaptiveMetrics(330.dp, 680.dp)
+        val foldable = DeviceOptimizationManager.computeAdaptiveMetrics(680.dp, 840.dp)
+        val tablet = DeviceOptimizationManager.computeAdaptiveMetrics(960.dp, 720.dp)
+
+        assertTrue(smallPhone.isUltraCompactPhone)
+        assertEquals(4, smallPhone.favoritesColumns)
+        assertEquals(2, smallPhone.tabGridColumns)
+
+        assertEquals(6, foldable.favoritesColumns)
+        assertEquals(3, foldable.tabGridColumns)
+
+        assertEquals(6, tablet.favoritesColumns)
+        assertEquals(4, tablet.tabGridColumns)
+        assertEquals(2, tablet.readingListColumns)
+    }
+
+    @Test
+    fun `gpu rasterization configures WebView hardware rasterization pipeline`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        assertEquals(
+            "Enable GPU Rasterization",
+            context.getString(R.string.enable_gpu_rasterization_label)
+        )
+        assertTrue(com.example.data.BrowserSettingsState().enableGpuRasterization)
+
+        val webView = WebView(context)
+        GpuRenderController.applyWebViewGpuPipeline(
+            webView = webView,
+            forceGpuRendering = false,
+            disableHardwareOverlays = false,
+            enableGpuRasterization = true
+        )
+        assertEquals(android.view.View.LAYER_TYPE_HARDWARE, webView.layerType)
+
+        GpuRenderController.applyWebViewGpuPipeline(
+            webView = webView,
+            forceGpuRendering = false,
+            disableHardwareOverlays = false,
+            enableGpuRasterization = false
+        )
+        assertEquals(android.view.View.LAYER_TYPE_NONE, webView.layerType)
     }
 }

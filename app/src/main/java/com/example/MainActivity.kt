@@ -7,8 +7,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.ViewModelProvider
 import com.example.core.DisplayRefreshRateManager
 import com.example.core.OsShellManager
+import com.example.ui.BrowserViewModel
 import com.example.ui.GlassBrowserApp
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -16,6 +18,10 @@ class MainActivity : ComponentActivity() {
 
     private val incomingSystemIntent =
         MutableStateFlow<OsShellManager.SystemShellIntentAction?>(null)
+
+    private val browserViewModel: BrowserViewModel by lazy {
+        ViewModelProvider(this)[BrowserViewModel::class.java]
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,7 +40,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             GlassBrowserApp(
                 systemIntentFlow = incomingSystemIntent,
-                onConsumeSystemIntent = { incomingSystemIntent.value = null }
+                onConsumeSystemIntent = { incomingSystemIntent.value = null },
+                viewModel = browserViewModel
             )
         }
     }
@@ -45,5 +52,10 @@ class MainActivity : ComponentActivity() {
         OsShellManager.parseIncomingSystemIntent(intent)?.let { action ->
             incomingSystemIntent.value = action
         }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        browserViewModel.trimMemory(level)
     }
 }
