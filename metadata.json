@@ -1,0 +1,6 @@
+{
+  "name": "Glass Browser",
+  "description": "A monochrome frosted-glass web browser with momentum and rubber-band scroll physics, 360Hz refresh rate support, adaptive wallpaper luminance labels, haptic feedback, and glass sound effects.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

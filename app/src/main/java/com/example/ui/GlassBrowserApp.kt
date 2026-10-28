@@ -1,0 +1,459 @@
+package com.example.ui
+
+import android.app.Activity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.R
+import com.example.core.DisplayRefreshRateManager
+import com.example.ui.components.FrostedGlassBox
+import com.example.ui.components.GlassElevation
+import com.example.ui.components.LocalSpatialBackdrop
+import com.example.ui.components.SpatialBackdropState
+import com.example.ui.components.configureBlurLayer
+import com.example.ui.screens.AddressSearchOverlay
+import com.example.ui.screens.BottomBrowserGlassBar
+import com.example.ui.screens.BrowserHubContent
+import com.example.ui.screens.NewTabGroupDialog
+import com.example.ui.screens.TabSwitcherOverlay
+import com.example.ui.screens.TopSegmentedGlassBar
+import com.example.ui.screens.WallpaperAndSettingsSheet
+import com.example.ui.screens.WebBrowserView
+import com.example.ui.theme.GlassBrowserTheme
+import com.example.ui.theme.LocalGlassStyle
+
+@Composable
+fun GlassBrowserApp(
+    viewModel: BrowserViewModel = viewModel()
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val webCommand by viewModel.webCommand.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val view = LocalView.current
+    val density = LocalDensity.current
+
+    var displayCapability by remember {
+        mutableStateOf(DisplayRefreshRateManager.DisplayCapability(120, 120, 360))
+    }
+    var isNewGroupDialogOpen by remember { mutableStateOf(false) }
+    var rootSize by remember { mutableStateOf(IntSize.Zero) }
+
+    // Apply up-to-360Hz refresh rate & touch boost whenever settings change
+    LaunchedEffect(uiState.settings.highRefreshRateEnabled) {
+        val activity = context as? Activity
+        if (activity != null) {
+            displayCapability = DisplayRefreshRateManager.applyHighRefreshRate(
+                activity = activity,
+                enabled = uiState.settings.highRefreshRateEnabled
+            )
+        }
+    }
+
+    // Update status bar icon legibility dynamically based on wallpaper luminance / active view
+    SideEffect {
+        val window = (context as? Activity)?.window ?: return@SideEffect
+        val insetsController = WindowCompat.getInsetsController(window, view)
+        val useDarkStatusIcons = when {
+            uiState.isTabSwitcherOpen -> !uiState.settings.isDarkMode
+            uiState.isViewingWebPage -> !uiState.settings.isDarkMode
+            else -> uiState.isWallpaperLight
+        }
+        insetsController.isAppearanceLightStatusBars = useDarkStatusIcons
+        insetsController.isAppearanceLightNavigationBars = !uiState.settings.isDarkMode
+    }
+
+    // Zero-permission Android Photo Picker for '+' Import Wallpaper
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importCustomWallpaper(uri)
+        }
+    }
+
+    // Back stack handling across all overlays, sub-sections, and WebView history
+    val canInterceptBack = isNewGroupDialogOpen ||
+        uiState.isAddressOverlayOpen ||
+        uiState.isSettingsSheetOpen ||
+        uiState.isTabSwitcherOpen ||
+        uiState.isViewingWebPage ||
+        uiState.activeSection != TopHubSection.START_PAGE
+
+    BackHandler(enabled = canInterceptBack) {
+        if (isNewGroupDialogOpen) {
+            isNewGroupDialogOpen = false
+        } else {
+            viewModel.onBackButtonClicked()
+        }
+    }
+
+    // Hardware GraphicsLayers for two-plane spatial frosted glass blur
+    val wallpaperBlurredLayer = rememberGraphicsLayer()
+    val sceneBlurredLayer = rememberGraphicsLayer()
+
+    val cardBlurPx = with(density) { 28.dp.toPx() }
+    val barBlurPx = with(density) { 34.dp.toPx() }
+
+    LaunchedEffect(wallpaperBlurredLayer, sceneBlurredLayer, cardBlurPx, barBlurPx) {
+        configureBlurLayer(wallpaperBlurredLayer, cardBlurPx)
+        configureBlurLayer(sceneBlurredLayer, barBlurPx)
+    }
+
+    val spatialBackdrop = remember(
+        wallpaperBlurredLayer,
+        sceneBlurredLayer,
+        uiState.resolvedWallpaper?.blurredBitmap,
+        rootSize
+    ) {
+        SpatialBackdropState(
+            wallpaperBlurredLayer = wallpaperBlurredLayer,
+            sceneBlurredLayer = sceneBlurredLayer,
+            fallbackBlurredBitmap = uiState.resolvedWallpaper?.blurredBitmap,
+            rootSize = rootSize
+        )
+    }
+
+    val backgroundZoomScale by animateFloatAsState(
+        targetValue = if (uiState.isTabSwitcherOpen) 0.94f else 1f,
+        animationSpec = spring(dampingRatio = 0.66f, stiffness = 330f),
+        label = "sceneZoomScale"
+    )
+
+    val statusTopInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val navBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+    GlassBrowserTheme(darkTheme = uiState.settings.isDarkMode) {
+        val style = LocalGlassStyle.current
+
+        CompositionLocalProvider(LocalSpatialBackdrop provides spatialBackdrop) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .onSizeChanged { rootSize = it }
+            ) {
+                // =========================================================================
+                // PLANE 1: Untinted Wallpaper + Active Browser Content (Recorded into sceneBlurredLayer)
+                // =========================================================================
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .drawWithContent {
+                            drawContent()
+                            sceneBlurredLayer.record {
+                                this@drawWithContent.drawContent()
+                            }
+                        }
+                        .graphicsLayer {
+                            scaleX = backgroundZoomScale
+                            scaleY = backgroundZoomScale
+                        }
+                ) {
+                    // 1A. Pure, 100% Untinted Wallpaper (NO white or black tint in Light or Dark Mode!)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .drawWithContent {
+                                drawContent()
+                                wallpaperBlurredLayer.record {
+                                    this@drawWithContent.drawContent()
+                                }
+                            }
+                    ) {
+                        val resolvedWp = uiState.resolvedWallpaper
+                        if (resolvedWp != null) {
+                            Image(
+                                bitmap = resolvedWp.fullBitmap,
+                                contentDescription = null,
+                                colorFilter = null, // Strictly untinted!
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Image(
+                                painter = painterResource(id = R.drawable.wp_forest_canopy),
+                                contentDescription = null,
+                                colorFilter = null, // Strictly untinted!
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+
+                    // 1B. Start Page Hub OR Live Hardware WebView
+                    val activeTab = uiState.activeTab
+                    if (activeTab != null && activeTab.url.isNotBlank()) {
+                        WebBrowserView(
+                            tabId = activeTab.id,
+                            url = activeTab.url,
+                            isPrivate = activeTab.isPrivate,
+                            webCommand = webCommand,
+                            onConsumeCommand = viewModel::consumeWebCommand,
+                            onPageStarted = viewModel::onWebPageStarted,
+                            onProgressChanged = viewModel::onWebProgressChanged,
+                            onPageFinished = viewModel::onWebPageFinished,
+                            onSnapshotCaptured = viewModel::updateTabSnapshot,
+                            onEdgeBounce = viewModel.feedback::onEdgeBounce,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(bottom = navBottomInset + 72.dp)
+                        )
+                    } else {
+                        BrowserHubContent(
+                            uiState = uiState,
+                            topContentPadding = statusTopInset + 74.dp,
+                            bottomContentPadding = navBottomInset + 92.dp,
+                            onOpenUrl = viewModel::openUrlOrSearch,
+                            onToggleShowAllFavorites = viewModel::toggleShowAllFavorites,
+                            onToggleShowAllReadingList = viewModel::toggleShowAllReadingList,
+                            onOpenCustomizeSheet = { viewModel.setSettingsSheetOpen(true) },
+                            onDeleteReadingItem = viewModel::removeReadingListItem,
+                            onDeleteBookmark = viewModel::removeBookmark,
+                            onClearHistory = viewModel::clearBrowsingHistory,
+                            onEdgeBounce = viewModel.feedback::onEdgeBounce
+                        )
+                    }
+                }
+
+                // =========================================================================
+                // PLANE 2: Floating Spatial Frosted Glass Chrome & Bouncy Overlays
+                // =========================================================================
+
+                // Top 4-Icon Segmented Glass Pill (visible on Start Page / Hub sections)
+                AnimatedVisibility(
+                    visible = !uiState.isViewingWebPage && !uiState.isTabSwitcherOpen,
+                    enter = fadeIn(spring(stiffness = 400f)) +
+                        slideInVertically(
+                            initialOffsetY = { -it },
+                            animationSpec = spring(dampingRatio = 0.66f, stiffness = 360f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { -it }),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(horizontal = 18.dp, vertical = 10.dp)
+                ) {
+                    TopSegmentedGlassBar(
+                        activeSection = uiState.activeSection,
+                        onSelectSection = viewModel::selectTopSection
+                    )
+                }
+
+                // Bottom Floating Browser Glass Bar (Back + Search/URL Pill + Tabs Button)
+                AnimatedVisibility(
+                    visible = !uiState.isTabSwitcherOpen && !uiState.isAddressOverlayOpen,
+                    enter = fadeIn(spring(stiffness = 400f)) +
+                        slideInVertically(
+                            initialOffsetY = { it },
+                            animationSpec = spring(dampingRatio = 0.66f, stiffness = 360f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { it }),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 18.dp, vertical = 12.dp)
+                ) {
+                    val canGoBack = uiState.isViewingWebPage ||
+                        uiState.activeSection != TopHubSection.START_PAGE
+                    BottomBrowserGlassBar(
+                        currentUrl = uiState.activeTab?.url.orEmpty(),
+                        canNavigateBack = canGoBack,
+                        isLoading = uiState.isLoadingWebPage,
+                        loadProgress = uiState.webLoadProgress,
+                        isPrivateMode = uiState.settings.isPrivateMode,
+                        onBackClick = viewModel::onBackButtonClicked,
+                        onAddressBarClick = viewModel::openAddressOverlay,
+                        onReloadOrVoiceClick = {
+                            if (uiState.isViewingWebPage) {
+                                viewModel.reloadCurrentPage()
+                            } else {
+                                viewModel.openAddressOverlay()
+                            }
+                        },
+                        onTabsClick = viewModel::openTabSwitcher
+                    )
+                }
+
+                // Full-Screen Frosted Glass Tab Switcher Overlay (Reference Image 1)
+                AnimatedVisibility(
+                    visible = uiState.isTabSwitcherOpen,
+                    enter = fadeIn(spring(stiffness = 420f)) +
+                        scaleIn(
+                            initialScale = 0.90f,
+                            animationSpec = spring(dampingRatio = 0.66f, stiffness = 350f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        scaleOut(
+                            targetScale = 0.92f,
+                            animationSpec = spring(stiffness = 440f)
+                        )
+                ) {
+                    TabSwitcherOverlay(
+                        uiState = uiState,
+                        tabSnapshots = viewModel.tabSnapshots,
+                        onSelectTab = viewModel::selectTab,
+                        onCloseTab = viewModel::closeTab,
+                        onNewTab = { viewModel.createNewTab(uiState.activeTabGroupFilter) },
+                        onDone = viewModel::closeTabSwitcher,
+                        onSwitchPrivacyMode = viewModel::switchTabPrivacyMode,
+                        onToggleSearch = viewModel::toggleTabSearch,
+                        onSearchQueryChange = viewModel::updateTabSearchQuery,
+                        onSelectGroupFilter = viewModel::setTabGroupFilter,
+                        onOpenNewGroupDialog = { isNewGroupDialogOpen = true },
+                        onOpenSettings = { viewModel.setSettingsSheetOpen(true) },
+                        onEdgeBounce = viewModel.feedback::onEdgeBounce
+                    )
+                }
+
+                // Omnibox URL / Search Frosted Overlay
+                AnimatedVisibility(
+                    visible = uiState.isAddressOverlayOpen,
+                    enter = fadeIn(spring(stiffness = 450f)) +
+                        slideInVertically(
+                            initialOffsetY = { it / 3 },
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 500f)) +
+                        slideOutVertically(targetOffsetY = { it / 3 })
+                ) {
+                    AddressSearchOverlay(
+                        currentUrl = uiState.activeTab?.url.orEmpty(),
+                        isViewingWebPage = uiState.isViewingWebPage,
+                        onSubmitUrlOrSearch = viewModel::openUrlOrSearch,
+                        onAddToFavorites = viewModel::saveCurrentPageToFavorites,
+                        onAddToReadingList = viewModel::saveCurrentPageToReadingList,
+                        onAddBookmark = viewModel::saveCurrentPageToBookmarks,
+                        onReloadPage = viewModel::reloadCurrentPage,
+                        onOpenSettings = { viewModel.setSettingsSheetOpen(true) },
+                        onDismiss = viewModel::closeAddressOverlay
+                    )
+                }
+
+                // Wallpaper Picker ('+' Import) & Light/Dark Monochrome Settings Sheet
+                AnimatedVisibility(
+                    visible = uiState.isSettingsSheetOpen,
+                    enter = fadeIn(spring(stiffness = 420f)) +
+                        slideInVertically(
+                            initialOffsetY = { it / 2 },
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 360f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { it / 2 })
+                ) {
+                    WallpaperAndSettingsSheet(
+                        uiState = uiState,
+                        displayCapability = displayCapability,
+                        onSelectDarkMode = viewModel::setDarkMode,
+                        onSelectWallpaper = viewModel::selectWallpaper,
+                        onImportWallpaperClick = {
+                            photoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        onDeleteCustomWallpaper = viewModel::deleteCustomWallpaper,
+                        onToggleHighRefresh = viewModel::setHighRefreshRateEnabled,
+                        onToggleSfx = viewModel::setSfxEnabled,
+                        onToggleHaptics = viewModel::setHapticsEnabled,
+                        onCloseAllTabs = viewModel::closeAllCurrentModeTabs,
+                        onEdgeBounce = viewModel.feedback::onEdgeBounce,
+                        onDismiss = { viewModel.setSettingsSheetOpen(false) }
+                    )
+                }
+
+                // New Tab Group Frosted Dialog
+                AnimatedVisibility(
+                    visible = isNewGroupDialogOpen,
+                    enter = fadeIn() + scaleIn(
+                        initialScale = 0.88f,
+                        animationSpec = spring(dampingRatio = 0.64f, stiffness = 380f)
+                    ),
+                    exit = fadeOut() + scaleOut(targetScale = 0.92f)
+                ) {
+                    NewTabGroupDialog(
+                        onConfirmGroup = viewModel::createTabGroupFromCurrentOrNew,
+                        onDismiss = { isNewGroupDialogOpen = false }
+                    )
+                }
+
+                // Floating Monochrome Frosted Status Pill Toast
+                AnimatedVisibility(
+                    visible = uiState.statusToast != null,
+                    enter = fadeIn() + slideInVertically(
+                        initialOffsetY = { -it },
+                        animationSpec = spring(dampingRatio = 0.62f, stiffness = 380f)
+                    ),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = 66.dp)
+                ) {
+                    FrostedGlassBox(
+                        shape = RoundedCornerShape(50),
+                        elevation = GlassElevation.FLOATING_BAR,
+                        useLiveSceneBackdrop = true
+                    ) {
+                        Text(
+                            text = uiState.statusToast.orEmpty(),
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
+                            color = style.contentPrimary,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
