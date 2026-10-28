@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.core.DisplayRefreshRateManager
+import com.example.core.OsShellManager
 import com.example.core.WallpaperLuminanceAnalyzer
 import com.example.data.CustomWallpaperEntity
 import com.example.ui.BrowserUiState
@@ -360,10 +361,14 @@ private fun QuickActionGlassChip(
 fun WallpaperAndSettingsSheet(
     uiState: BrowserUiState,
     displayCapability: DisplayRefreshRateManager.DisplayCapability,
+    osRoleStatus: OsShellManager.OsRoleStatus,
     onSelectDarkMode: (Boolean) -> Unit,
     onSelectWallpaper: (String) -> Unit,
     onImportWallpaperClick: () -> Unit,
     onDeleteCustomWallpaper: (CustomWallpaperEntity) -> Unit,
+    onRequestHomeOsRole: () -> Unit,
+    onRequestBrowserRole: () -> Unit,
+    onToggleImmersiveOsMode: (Boolean) -> Unit,
     onToggleHighRefresh: (Boolean) -> Unit,
     onToggleForceGpu: (Boolean) -> Unit,
     onToggleDisableHwOverlays: (Boolean) -> Unit,
@@ -742,7 +747,40 @@ fun WallpaperAndSettingsSheet(
                     }
                 }
 
-                // 3. Physics, 360Hz Engine, SFX & Haptics
+                // 2.5 Operating System Shell (ROLE_HOME, ROLE_BROWSER & Immersive Fullscreen OS Mode)
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = stringResource(R.string.os_shell_section_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = style.contentPrimary
+                        )
+
+                        MonochromeOsRoleRow(
+                            title = stringResource(R.string.default_home_os_label),
+                            subtitle = stringResource(R.string.default_home_os_subtitle),
+                            isHeld = osRoleStatus.isDefaultHomeShell,
+                            onRequestRole = onRequestHomeOsRole,
+                            tag = "button_set_default_home_os"
+                        )
+                        MonochromeOsRoleRow(
+                            title = stringResource(R.string.default_browser_os_label),
+                            subtitle = stringResource(R.string.default_browser_os_subtitle),
+                            isHeld = osRoleStatus.isDefaultBrowser,
+                            onRequestRole = onRequestBrowserRole,
+                            tag = "button_set_default_browser"
+                        )
+                        MonochromeToggleRow(
+                            title = stringResource(R.string.immersive_os_mode_label),
+                            subtitle = stringResource(R.string.immersive_os_mode_subtitle),
+                            checked = uiState.settings.immersiveOsMode,
+                            onCheckedChange = onToggleImmersiveOsMode,
+                            tag = "toggle_immersive_os_mode"
+                        )
+                    }
+                }
+
+                // 3. Physics, 360Hz Engine, GPU, SFX & Haptics
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
@@ -968,6 +1006,82 @@ private fun MonochromeToggleRow(
                 ),
                 modifier = Modifier.testTag(tag)
             )
+        }
+    }
+}
+
+@Composable
+private fun MonochromeOsRoleRow(
+    title: String,
+    subtitle: String,
+    isHeld: Boolean,
+    onRequestRole: () -> Unit,
+    tag: String
+) {
+    val style = LocalGlassStyle.current
+    FrostedGlassBox(
+        shape = RoundedCornerShape(20.dp),
+        elevation = GlassElevation.CARD,
+        useLiveSceneBackdrop = false,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = style.contentPrimary
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = style.contentSecondary
+                )
+            }
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .height(48.dp)
+                    .padding(vertical = 5.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (isHeld) style.activeSegmentFill else style.solidActionFill)
+                    .testTag(tag)
+                    .bouncyClickable(
+                        pressedScale = 0.91f,
+                        contentDescriptionText = title,
+                        onClick = onRequestRole
+                    )
+                    .padding(horizontal = 14.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (isHeld) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = null,
+                            tint = style.contentPrimary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                    Text(
+                        text = if (isHeld) {
+                            stringResource(R.string.os_role_active_badge)
+                        } else {
+                            stringResource(R.string.os_role_set_button)
+                        },
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (isHeld) style.contentPrimary else style.solidActionContent
+                    )
+                }
+            }
         }
     }
 }

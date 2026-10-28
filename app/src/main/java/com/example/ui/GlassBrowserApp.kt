@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.app.Activity
+import android.content.Intent
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -30,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -52,11 +55,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
 import com.example.core.DisplayRefreshRateManager
 import com.example.core.GpuRenderController
+import com.example.core.OsShellManager
 import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
 import com.example.ui.components.LocalSpatialBackdrop
@@ -72,22 +79,68 @@ import com.example.ui.screens.WallpaperAndSettingsSheet
 import com.example.ui.screens.WebBrowserView
 import com.example.ui.theme.GlassBrowserTheme
 import com.example.ui.theme.LocalGlassStyle
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 @Composable
 fun GlassBrowserApp(
+    systemIntentFlow: StateFlow<OsShellManager.SystemShellIntentAction?> = remember {
+        MutableStateFlow(null)
+    },
+    onConsumeSystemIntent: () -> Unit = {},
     viewModel: BrowserViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val webCommand by viewModel.webCommand.collectAsStateWithLifecycle()
+    val incomingSystemAction by systemIntentFlow.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val view = LocalView.current
     val density = LocalDensity.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     var displayCapability by remember {
         mutableStateOf(DisplayRefreshRateManager.DisplayCapability(120, 120, 360))
     }
+    var osRoleStatus by remember {
+        mutableStateOf(OsShellManager.queryRoleStatus(context))
+    }
     var isNewGroupDialogOpen by remember { mutableStateOf(false) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
+
+    // Refresh OS Role status (ROLE_HOME / ROLE_BROWSER) and re-apply immersive OS bars on resume
+    DisposableEffect(lifecycleOwner, context, uiState.settings.immersiveOsMode) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                osRoleStatus = OsShellManager.queryRoleStatus(context)
+                val activity = context as? Activity
+                if (activity != null) {
+                    OsShellManager.applyImmersiveOsMode(
+                        activity = activity,
+                        immersiveEnabled = uiState.settings.immersiveOsMode
+                    )
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Handle incoming OS Home button presses (CATEGORY_HOME) and external http/https/search intents
+    LaunchedEffect(incomingSystemAction) {
+        when (val action = incomingSystemAction) {
+            OsShellManager.SystemShellIntentAction.GoHome -> {
+                isNewGroupDialogOpen = false
+                viewModel.onSystemHomeAction()
+                onConsumeSystemIntent()
+            }
+            is OsShellManager.SystemShellIntentAction.OpenUrlOrQuery -> {
+                isNewGroupDialogOpen = false
+                viewModel.openUrlOrSearch(action.rawInput)
+                onConsumeSystemIntent()
+            }
+            null -> Unit
+        }
+    }
 
     // Apply up-to-360Hz refresh rate & touch boost whenever settings change
     LaunchedEffect(uiState.settings.highRefreshRateEnabled) {
@@ -115,6 +168,17 @@ fun GlassBrowserApp(
         }
     }
 
+    // Apply Immersive Fullscreen OS Mode live
+    LaunchedEffect(uiState.settings.immersiveOsMode) {
+        val activity = context as? Activity
+        if (activity != null) {
+            OsShellManager.applyImmersiveOsMode(
+                activity = activity,
+                immersiveEnabled = uiState.settings.immersiveOsMode
+            )
+        }
+    }
+
     // Update status bar icon legibility dynamically based on wallpaper luminance / active view
     SideEffect {
         val window = (context as? Activity)?.window ?: return@SideEffect
@@ -128,6 +192,13 @@ fun GlassBrowserApp(
         insetsController.isAppearanceLightNavigationBars = !uiState.settings.isDarkMode
     }
 
+    // Launcher for Android RoleManager (ROLE_HOME & ROLE_BROWSER)
+    val osRoleRequestLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        osRoleStatus = OsShellManager.queryRoleStatus(context)
+    }
+
     // Zero-permission Android Photo Picker for '+' Import Wallpaper
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -137,19 +208,24 @@ fun GlassBrowserApp(
         }
     }
 
-    // Back stack handling across all overlays, sub-sections, and WebView history
-    val canInterceptBack = isNewGroupDialogOpen ||
+    // OS-Level Root Back Stack Lock:
+    // Like a true Operating System Home Shell, pressing system Back unwinds overlays/pages,
+    // and at the root Home Start Page stays anchored in the OS shell instead of exiting!
+    val hasInternalBackTarget = isNewGroupDialogOpen ||
         uiState.isAddressOverlayOpen ||
         uiState.isSettingsSheetOpen ||
         uiState.isTabSwitcherOpen ||
         uiState.isViewingWebPage ||
         uiState.activeSection != TopHubSection.START_PAGE
 
-    BackHandler(enabled = canInterceptBack) {
-        if (isNewGroupDialogOpen) {
-            isNewGroupDialogOpen = false
-        } else {
-            viewModel.onBackButtonClicked()
+    BackHandler(enabled = true) {
+        when {
+            isNewGroupDialogOpen -> isNewGroupDialogOpen = false
+            hasInternalBackTarget -> viewModel.onBackButtonClicked()
+            else -> {
+                // Anchored on OS Home screen — give subtle glass haptic confirmation without exiting
+                viewModel.feedback.onGlassTap()
+            }
         }
     }
 
@@ -234,8 +310,6 @@ fun GlassBrowserApp(
                 ) {
                     if (activeTab != null && activeTab.url.isNotBlank()) {
                         // Viewing a live site: NO wallpaper rendered behind or below!
-                        // Draw live webpage snapshot into the Compose canvas underneath AndroidView
-                        // so floating frosted glass bars blur the site itself (never wallpaper).
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -266,7 +340,7 @@ fun GlassBrowserApp(
                             )
                         }
                     } else {
-                        // Start Page / Hub: Render 100% Untinted Wallpaper + Hub Content
+                        // OS Home / Start Page Hub: Render 100% Untinted Wallpaper + Hub Content
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -429,7 +503,7 @@ fun GlassBrowserApp(
                     )
                 }
 
-                // Wallpaper Picker ('+' Import) & Light/Dark Monochrome Settings Sheet
+                // Wallpaper Picker ('+' Import), OS Shell Roles & Monochrome Settings Sheet
                 AnimatedVisibility(
                     visible = uiState.isSettingsSheetOpen,
                     enter = fadeIn(spring(stiffness = 420f)) +
@@ -443,6 +517,7 @@ fun GlassBrowserApp(
                     WallpaperAndSettingsSheet(
                         uiState = uiState,
                         displayCapability = displayCapability,
+                        osRoleStatus = osRoleStatus,
                         onSelectDarkMode = viewModel::setDarkMode,
                         onSelectWallpaper = viewModel::selectWallpaper,
                         onImportWallpaperClick = {
@@ -451,6 +526,33 @@ fun GlassBrowserApp(
                             )
                         },
                         onDeleteCustomWallpaper = viewModel::deleteCustomWallpaper,
+                        onRequestHomeOsRole = {
+                            viewModel.feedback.onGlassTap()
+                            try {
+                                if (osRoleStatus.isDefaultHomeShell) {
+                                    osRoleRequestLauncher.launch(Intent(Settings.ACTION_HOME_SETTINGS))
+                                } else {
+                                    osRoleRequestLauncher.launch(
+                                        OsShellManager.createRequestHomeRoleIntent(context)
+                                    )
+                                }
+                            } catch (_: Throwable) {}
+                        },
+                        onRequestBrowserRole = {
+                            viewModel.feedback.onGlassTap()
+                            try {
+                                if (osRoleStatus.isDefaultBrowser) {
+                                    osRoleRequestLauncher.launch(
+                                        Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)
+                                    )
+                                } else {
+                                    osRoleRequestLauncher.launch(
+                                        OsShellManager.createRequestBrowserRoleIntent(context)
+                                    )
+                                }
+                            } catch (_: Throwable) {}
+                        },
+                        onToggleImmersiveOsMode = viewModel::setImmersiveOsMode,
                         onToggleHighRefresh = viewModel::setHighRefreshRateEnabled,
                         onToggleForceGpu = viewModel::setForceGpuRendering,
                         onToggleDisableHwOverlays = viewModel::setDisableHardwareOverlays,

@@ -326,6 +326,24 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Invoked when the phone's physical/gesture Home action dispatches CATEGORY_HOME to our OS shell.
+     */
+    fun onSystemHomeAction() {
+        transientState.update {
+            it.copy(
+                isTabSwitcherOpen = false,
+                isAddressOverlayOpen = false,
+                isSettingsSheetOpen = false,
+                activeSection = TopHubSection.START_PAGE
+            )
+        }
+        val active = uiState.value.activeTab
+        if (active != null && active.url.isNotBlank()) {
+            returnToStartPage()
+        }
+    }
+
     fun onBackButtonClicked() {
         feedback.onGlassTap()
         val state = uiState.value
@@ -578,6 +596,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             repository.setDisableHardwareOverlays(enabled)
             showToast(if (enabled) "Hardware Overlays disabled (GPU compositing)" else "Hardware Overlays allowed")
+        }
+    }
+
+    fun setImmersiveOsMode(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        viewModelScope.launch {
+            repository.setImmersiveOsMode(enabled)
+            showToast(if (enabled) "Immersive OS Mode active" else "Standard system bars shown")
         }
     }
 

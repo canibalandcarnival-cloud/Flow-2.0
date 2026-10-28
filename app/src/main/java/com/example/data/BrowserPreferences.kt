@@ -23,6 +23,7 @@ data class BrowserSettingsState(
     val highRefreshRateEnabled: Boolean = true,
     val forceGpuRendering: Boolean = true,
     val disableHardwareOverlays: Boolean = true,
+    val immersiveOsMode: Boolean = true,
     val activeTabId: Long = -1L,
     val isPrivateMode: Boolean = false
 )
@@ -37,6 +38,7 @@ class BrowserPreferences(private val context: Context) {
         val HIGH_REFRESH_ENABLED = booleanPreferencesKey("high_refresh_enabled")
         val FORCE_GPU_RENDERING = booleanPreferencesKey("force_gpu_rendering")
         val DISABLE_HW_OVERLAYS = booleanPreferencesKey("disable_hw_overlays")
+        val IMMERSIVE_OS_MODE = booleanPreferencesKey("immersive_os_mode")
         val ACTIVE_TAB_ID = longPreferencesKey("active_tab_id")
         val IS_PRIVATE_MODE = booleanPreferencesKey("is_private_mode")
     }
@@ -50,6 +52,7 @@ class BrowserPreferences(private val context: Context) {
             highRefreshRateEnabled = prefs[Keys.HIGH_REFRESH_ENABLED] ?: true,
             forceGpuRendering = prefs[Keys.FORCE_GPU_RENDERING] ?: true,
             disableHardwareOverlays = prefs[Keys.DISABLE_HW_OVERLAYS] ?: true,
+            immersiveOsMode = prefs[Keys.IMMERSIVE_OS_MODE] ?: true,
             activeTabId = prefs[Keys.ACTIVE_TAB_ID] ?: -1L,
             isPrivateMode = prefs[Keys.IS_PRIVATE_MODE] ?: false
         )
@@ -81,6 +84,10 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setDisableHardwareOverlays(enabled: Boolean) {
         context.browserDataStore.edit { it[Keys.DISABLE_HW_OVERLAYS] = enabled }
+    }
+
+    suspend fun setImmersiveOsMode(enabled: Boolean) {
+        context.browserDataStore.edit { it[Keys.IMMERSIVE_OS_MODE] = enabled }
     }
 
     suspend fun setActiveTab(tabId: Long, isPrivate: Boolean) {
