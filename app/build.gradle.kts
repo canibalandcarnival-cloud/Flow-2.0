@@ -1,4 +1,14 @@
+import com.android.build.api.artifact.SingleArtifact
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
 
 plugins {
   alias(libs.plugins.android.application)
@@ -142,3 +152,34 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   // "ksp"(libs.moshi.kotlin.codegen)
 }
+
+abstract class ExportDebugApkTask : DefaultTask() {
+  @get:InputDirectory
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val apkDir: DirectoryProperty
+
+  @get:OutputFile
+  abstract val destinationApk: RegularFileProperty
+
+  @TaskAction
+  fun exportApk() {
+    val sourceApk =
+      apkDir.get().asFile.walkTopDown().firstOrNull { it.isFile && it.extension == "apk" }
+        ?: throw GradleException("No compiled debug APK found in ${apkDir.get().asFile}")
+    sourceApk.copyTo(destinationApk.get().asFile, overwrite = true)
+  }
+}
+
+androidComponents {
+  onVariants(selector().withBuildType("debug")) { variant ->
+    val copyDebugApkToRoot =
+      tasks.register<ExportDebugApkTask>("copyDebugApkToRoot") {
+        apkDir.set(variant.artifacts.get(SingleArtifact.APK))
+        destinationApk.set(rootProject.layout.projectDirectory.file("app-debug.apk"))
+      }
+    tasks.matching { it.name == "assembleDebug" }.configureEach {
+      finalizedBy(copyDebugApkToRoot)
+    }
+  }
+}
+
