@@ -9,6 +9,7 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 import java.time.Duration
 
 plugins {
@@ -154,6 +155,7 @@ dependencies {
   // "ksp"(libs.moshi.kotlin.codegen)
 }
 
+@DisableCachingByDefault(because = "Copies the compiled debug APK to the project root directory")
 abstract class ExportDebugApkTask : DefaultTask() {
   @get:InputDirectory
   @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -167,7 +169,10 @@ abstract class ExportDebugApkTask : DefaultTask() {
     val sourceApk =
       apkDir.get().asFile.walkTopDown().firstOrNull { it.isFile && it.extension == "apk" }
         ?: throw GradleException("No compiled debug APK found in ${apkDir.get().asFile}")
-    sourceApk.copyTo(destinationApk.get().asFile, overwrite = true)
+    val destination = destinationApk.get().asFile
+    destination.parentFile?.mkdirs()
+    sourceApk.copyTo(destination, overwrite = true)
+    logger.lifecycle("Copied compiled debug APK to ${destination.absolutePath} (${destination.length()} bytes)")
   }
 }
 
@@ -175,10 +180,12 @@ androidComponents {
   onVariants(selector().withBuildType("debug")) { variant ->
     val copyDebugApkToRoot =
       tasks.register<ExportDebugApkTask>("copyDebugApkToRoot") {
+        group = "build"
+        description = "Automatically copies the compiled debug APK into the project root directory."
         apkDir.set(variant.artifacts.get(SingleArtifact.APK))
         destinationApk.set(rootProject.layout.projectDirectory.file("app-debug.apk"))
       }
-    tasks.matching { it.name == "assembleDebug" }.configureEach {
+    tasks.matching { it.name == "assembleDebug" || it.name == "packageDebug" }.configureEach {
       finalizedBy(copyDebugApkToRoot)
     }
   }
