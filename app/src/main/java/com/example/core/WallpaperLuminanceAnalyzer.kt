@@ -34,10 +34,6 @@ data class ResolvedWallpaper(
 object WallpaperLuminanceAnalyzer {
 
     val presets: List<PresetWallpaper> = listOf(
-        PresetWallpaper("preset:prism_waves", "Prism Waves", R.drawable.img_prism_waves),
-        PresetWallpaper("preset:aurora_atrium", "Aurora Atrium", R.drawable.img_aurora_atrium),
-        PresetWallpaper("preset:sunlit_botanical", "Botanical Glass", R.drawable.img_sunlit_botanical),
-        PresetWallpaper("preset:nordic_prism", "Nordic Prism", R.drawable.img_nordic_prism),
         PresetWallpaper("preset:forest", "Forest Canopy", R.drawable.wp_forest_canopy),
         PresetWallpaper("preset:alpine", "Midnight Peaks", R.drawable.wp_midnight_peaks),
         PresetWallpaper("preset:obsidian", "Obsidian Silk", R.drawable.wp_obsidian_silk),
@@ -122,7 +118,7 @@ object WallpaperLuminanceAnalyzer {
                 BitmapFactory.decodeFile(customFilePath, opts)
             } else {
                 val resId = presets.firstOrNull { it.id == wallpaperId }?.drawableRes
-                    ?: R.drawable.img_prism_waves
+                    ?: R.drawable.wp_forest_canopy
                 val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeResource(context.resources, resId, boundsOpts)
                 val opts = BitmapFactory.Options().apply {
@@ -152,32 +148,6 @@ object WallpaperLuminanceAnalyzer {
                 averageLuminance = luminance,
                 isLightWallpaper = luminance >= 0.46
             )
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
-    /**
-     * Produces a silky StackBlurred backdrop bitmap from a captured WebView snapshot off-thread
-     * so floating frosted glass bars, omnibox, and modal sheets refract live webpage content
-     * with zero scroll-thread overhead.
-     */
-    fun blurSnapshotBitmap(
-        source: Bitmap,
-        profile: DeviceOptimizationManager.DeviceProfile
-    ): ImageBitmap? {
-        return try {
-            if (source.width <= 4 || source.height <= 4) return null
-            val downFactor = (profile.fallbackStackBlurDownscale / 2).coerceAtLeast(2)
-            val downW = (source.width / downFactor).coerceIn(56, 220)
-            val downH = (source.height / downFactor).coerceIn(96, 360)
-            val scaled = Bitmap.createScaledBitmap(source, downW, downH, true)
-            val argbCopy = if (scaled.config == Bitmap.Config.ARGB_8888 && scaled.isMutable) {
-                scaled
-            } else {
-                scaled.copy(Bitmap.Config.ARGB_8888, true)
-            }
-            stackBlur(argbCopy, radius = profile.fallbackStackBlurRadius.coerceAtLeast(10)).asImageBitmap()
         } catch (_: Throwable) {
             null
         }
@@ -214,6 +184,29 @@ object WallpaperLuminanceAnalyzer {
             y += stepY
         }
         return if (totalWeight > 0.0) weightedSum / totalWeight else 0.0
+    }
+
+    /**
+     * Produces a lightweight downscaled & StackBlurred ImageBitmap on a background dispatcher
+     * so live WebView content can refract through floating frosted-glass surfaces while scrolling
+     * or dragging without blocking UI frame pacing.
+     */
+    fun blurBitmapForBackdrop(
+        source: Bitmap,
+        downscale: Int = 4,
+        radius: Int = 14
+    ): ImageBitmap? {
+        return try {
+            if (source.width <= 8 || source.height <= 8) return null
+            val factor = downscale.coerceAtLeast(2)
+            val downW = (source.width / factor).coerceAtLeast(40)
+            val downH = (source.height / factor).coerceAtLeast(64)
+            val scaled = Bitmap.createScaledBitmap(source, downW, downH, true)
+                .copy(Bitmap.Config.ARGB_8888, true)
+            stackBlur(scaled, radius.coerceIn(4, 24)).asImageBitmap()
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     /**

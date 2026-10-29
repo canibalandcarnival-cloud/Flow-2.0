@@ -1,12 +1,7 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -42,10 +37,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
@@ -86,13 +83,10 @@ import com.example.core.DisplayRefreshRateManager
 import com.example.core.OsShellManager
 import com.example.core.WallpaperLuminanceAnalyzer
 import com.example.data.CustomWallpaperEntity
-import com.example.data.GlassBackdropMode
 import com.example.ui.BrowserUiState
 import com.example.ui.components.EyeglassesIcon
 import com.example.ui.components.FrostedGlassBox
-import com.example.ui.components.GlassBackdropModeSelector
 import com.example.ui.components.GlassElevation
-import com.example.ui.components.GlassModalBackdrop
 import com.example.ui.components.bouncyClickable
 import com.example.ui.components.rememberPhysicalMomentumFlingBehavior
 import com.example.ui.components.rubberBandOverscroll
@@ -111,6 +105,8 @@ fun AddressSearchOverlay(
     onAddToReadingList: () -> Unit,
     onAddBookmark: () -> Unit,
     onReloadPage: () -> Unit,
+    onOpenSiriAi: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -122,10 +118,16 @@ fun AddressSearchOverlay(
         focusRequester.requestFocus()
     }
 
-    GlassModalBackdrop(
-        scrimAlpha = 0.28f,
-        onDismiss = onDismiss,
-        contentAlignment = Alignment.BottomCenter
+    Box(
+        contentAlignment = Alignment.BottomCenter,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(style.glassBaseColor.copy(alpha = 0.28f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss
+            )
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -185,6 +187,30 @@ fun AddressSearchOverlay(
                         modifier = Modifier.weight(1f)
                     )
                 }
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                QuickActionGlassChip(
+                    icon = { Icon(Icons.Outlined.AutoAwesome, null, tint = style.contentPrimary, modifier = Modifier.size(18.dp)) },
+                    label = "Siri AI",
+                    onClick = {
+                        onDismiss()
+                        onOpenSiriAi()
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                QuickActionGlassChip(
+                    icon = { Icon(Icons.Outlined.Download, null, tint = style.contentPrimary, modifier = Modifier.size(18.dp)) },
+                    label = "Downloads",
+                    onClick = {
+                        onDismiss()
+                        onOpenDownloads()
+                    },
+                    modifier = Modifier.weight(1f)
+                )
             }
 
             // Frosted Omnibox Input Bar
@@ -366,11 +392,6 @@ fun WallpaperAndSettingsSheet(
     displayCapability: DisplayRefreshRateManager.DisplayCapability,
     osRoleStatus: OsShellManager.OsRoleStatus,
     onSelectDarkMode: (Boolean) -> Unit,
-    onToggleFrostedGlass: (Boolean) -> Unit,
-    onSelectBackdropMode: (GlassBackdropMode) -> Unit,
-    onGoogleSignInClick: () -> Unit,
-    onGoogleManageAccountClick: () -> Unit,
-    onGoogleSignOutClick: () -> Unit,
     onSelectWallpaper: (String) -> Unit,
     onImportWallpaperClick: () -> Unit,
     onDeleteCustomWallpaper: (CustomWallpaperEntity) -> Unit,
@@ -378,8 +399,6 @@ fun WallpaperAndSettingsSheet(
     onRequestBrowserRole: () -> Unit,
     onToggleImmersiveOsMode: (Boolean) -> Unit,
     onToggleHighRefresh: (Boolean) -> Unit,
-    onToggleDisableGpuVsync: (Boolean) -> Unit,
-    onToggleDisableFrameRateLimit: (Boolean) -> Unit,
     onToggleForceGpu: (Boolean) -> Unit,
     onToggleGpuRasterization: (Boolean) -> Unit,
     onToggleDisableHwOverlays: (Boolean) -> Unit,
@@ -393,10 +412,16 @@ fun WallpaperAndSettingsSheet(
     val liveFps by DisplayRefreshRateManager.observeLiveFps().collectAsState(initial = displayCapability.activeHz)
     val momentumFling = rememberPhysicalMomentumFlingBehavior()
 
-    GlassModalBackdrop(
-        scrimAlpha = 0.26f,
-        onDismiss = onDismiss,
-        contentAlignment = Alignment.BottomCenter
+    Box(
+        contentAlignment = Alignment.BottomCenter,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(style.glassBaseColor.copy(alpha = 0.26f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss
+            )
     ) {
         BoxWithConstraints(
             contentAlignment = Alignment.BottomCenter,
@@ -474,16 +499,6 @@ fun WallpaperAndSettingsSheet(
                             }
                         }
                     }
-                }
-
-                // 0. Google Account Login & Shared Web Session Card
-                item {
-                    GoogleAccountSettingsSection(
-                        settings = uiState.settings,
-                        onSignInClick = onGoogleSignInClick,
-                        onManageAccountClick = onGoogleManageAccountClick,
-                        onSignOutClick = onGoogleSignOutClick
-                    )
                 }
 
                 // 1. Light Mode (White UI) / Dark Mode (Black UI) Segmented Toggle
@@ -588,25 +603,6 @@ fun WallpaperAndSettingsSheet(
                                     }
                                 }
                             }
-                        }
-
-                        MonochromeToggleRow(
-                            title = stringResource(R.string.frosted_glass_label),
-                            subtitle = stringResource(R.string.frosted_glass_subtitle),
-                            checked = uiState.settings.frostedGlassEnabled,
-                            onCheckedChange = onToggleFrostedGlass,
-                            tag = "toggle_frosted_glass"
-                        )
-
-                        AnimatedVisibility(
-                            visible = uiState.settings.frostedGlassEnabled,
-                            enter = fadeIn() + expandVertically(spring(dampingRatio = 0.72f, stiffness = 360f)),
-                            exit = fadeOut() + shrinkVertically()
-                        ) {
-                            GlassBackdropModeSelector(
-                                selectedMode = uiState.settings.glassBackdropMode,
-                                onSelectMode = onSelectBackdropMode
-                            )
                         }
                     }
                 }
@@ -856,20 +852,6 @@ fun WallpaperAndSettingsSheet(
                             checked = uiState.settings.highRefreshRateEnabled,
                             onCheckedChange = onToggleHighRefresh,
                             tag = "toggle_360hz"
-                        )
-                        MonochromeToggleRow(
-                            title = stringResource(R.string.disable_gpu_vsync_label),
-                            subtitle = stringResource(R.string.disable_gpu_vsync_subtitle),
-                            checked = uiState.settings.disableGpuVsync,
-                            onCheckedChange = onToggleDisableGpuVsync,
-                            tag = "toggle_disable_gpu_vsync"
-                        )
-                        MonochromeToggleRow(
-                            title = stringResource(R.string.disable_frame_rate_limit_label),
-                            subtitle = stringResource(R.string.disable_frame_rate_limit_subtitle),
-                            checked = uiState.settings.disableFrameRateLimit,
-                            onCheckedChange = onToggleDisableFrameRateLimit,
-                            tag = "toggle_disable_frame_rate_limit"
                         )
                         MonochromeToggleRow(
                             title = stringResource(R.string.enable_gpu_rasterization_label),
@@ -1176,10 +1158,16 @@ fun NewTabGroupDialog(
         focusRequester.requestFocus()
     }
 
-    GlassModalBackdrop(
-        scrimAlpha = 0.34f,
-        onDismiss = onDismiss,
-        contentAlignment = Alignment.Center
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(style.glassBaseColor.copy(alpha = 0.34f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss
+            )
     ) {
         FrostedGlassBox(
             shape = RoundedCornerShape(28.dp),

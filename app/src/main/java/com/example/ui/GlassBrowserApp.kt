@@ -51,7 +51,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -64,27 +63,29 @@ import com.example.R
 import com.example.core.DisplayRefreshRateManager
 import com.example.core.GpuRenderController
 import com.example.core.OsShellManager
-import com.example.data.GlassBackdropMode
+import com.example.core.SiriAiUiState
 import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
+import com.example.ui.components.GlassMotionTracker
 import com.example.ui.components.LocalSpatialBackdrop
 import com.example.ui.components.SpatialBackdropState
-import com.example.ui.components.clearBlurLayer
 import com.example.ui.components.configureBlurLayer
 import com.example.ui.screens.AddressSearchOverlay
 import com.example.ui.screens.BottomBrowserGlassBar
 import com.example.ui.screens.BrowserHubContent
-import com.example.ui.screens.GoogleAccountSignInOverlay
+import com.example.ui.screens.FindInPageGlassBar
 import com.example.ui.screens.NewTabGroupDialog
+import com.example.ui.screens.SiriIos26AssistantOverlay
+import com.example.ui.screens.SiriIos26PerimeterAura
 import com.example.ui.screens.TabSwitcherOverlay
 import com.example.ui.screens.TopSegmentedGlassBar
 import com.example.ui.screens.WallpaperAndSettingsSheet
 import com.example.ui.screens.WebBrowserView
+import com.example.ui.screens.WebToolsGlassSheet
 import com.example.ui.theme.GlassBrowserTheme
 import com.example.ui.theme.LocalGlassStyle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlin.math.roundToInt
 
 @Composable
 fun GlassBrowserApp(
@@ -110,6 +111,7 @@ fun GlassBrowserApp(
     }
     var isNewGroupDialogOpen by remember { mutableStateOf(false) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
+    val glassMotionTracker = remember { GlassMotionTracker() }
 
     // Refresh OS Role status (ROLE_HOME / ROLE_BROWSER) and re-apply immersive OS bars on resume
     DisposableEffect(lifecycleOwner, context, uiState.settings.immersiveOsMode) {
@@ -146,19 +148,13 @@ fun GlassBrowserApp(
         }
     }
 
-    // Apply up-to-360Hz refresh rate, uncapped frame pacing & touch boost whenever settings change
-    LaunchedEffect(
-        uiState.settings.highRefreshRateEnabled,
-        uiState.settings.disableFrameRateLimit,
-        uiState.settings.disableGpuVsync
-    ) {
+    // Apply up-to-360Hz refresh rate & touch boost whenever High Refresh Rate setting changes
+    LaunchedEffect(uiState.settings.highRefreshRateEnabled) {
         val activity = context as? Activity
         if (activity != null) {
             displayCapability = DisplayRefreshRateManager.applyHighRefreshRate(
                 activity = activity,
-                enabled = uiState.settings.highRefreshRateEnabled,
-                disableFrameRateLimit = uiState.settings.disableFrameRateLimit,
-                disableGpuVsync = uiState.settings.disableGpuVsync
+                enabled = uiState.settings.highRefreshRateEnabled
             )
         }
     }
@@ -204,14 +200,12 @@ fun GlassBrowserApp(
         insetsController.isAppearanceLightNavigationBars = !uiState.settings.isDarkMode
     }
 
-    // Launcher for Android RoleManager (ROLE_HOME & ROLE_BROWSER)
     val osRoleRequestLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
         osRoleStatus = OsShellManager.queryRoleStatus(context)
     }
 
-    // Zero-permission Android Photo Picker for '+' Import Wallpaper
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -220,11 +214,10 @@ fun GlassBrowserApp(
         }
     }
 
-    // OS-Level Root Back Stack Lock:
-    // Like a true Operating System Home Shell, pressing system Back unwinds overlays/pages,
-    // and at the root Home Start Page stays anchored in the OS shell instead of exiting!
     val hasInternalBackTarget = isNewGroupDialogOpen ||
-        uiState.isGoogleSignInSheetOpen ||
+        uiState.isSiriOpen ||
+        uiState.isWebToolsSheetOpen ||
+        uiState.isFindInPageOpen ||
         uiState.isAddressOverlayOpen ||
         uiState.isSettingsSheetOpen ||
         uiState.isTabSwitcherOpen ||
@@ -235,88 +228,56 @@ fun GlassBrowserApp(
         when {
             isNewGroupDialogOpen -> isNewGroupDialogOpen = false
             hasInternalBackTarget -> viewModel.onBackButtonClicked()
-            else -> {
-                // Anchored on OS Home screen — give subtle glass haptic confirmation without exiting
-                viewModel.feedback.onGlassTap()
-            }
+            else -> viewModel.feedback.onGlassTap()
         }
     }
 
-    // Hardware GraphicsLayers for multi-plane spatial frosted glass:
-    // - wallpaperBlurredLayer: static Start Page wallpaper blur for inner Hub cards
-    // - sceneBlurredLayer: full Start Page scene (wallpaper + Hub cards) for floating bars & overlays
-    // - webSceneBlurredLayer: settled live webpage snapshot blur (zero recording during active WebView scroll)
+    // Hardware GraphicsLayers for multi-plane spatial frosted glass on the Start Page
     val wallpaperBlurredLayer = rememberGraphicsLayer()
     val sceneBlurredLayer = rememberGraphicsLayer()
-    val webSceneBlurredLayer = rememberGraphicsLayer()
 
-    val blurMultiplier = if (uiState.settings.glassBackdropMode == GlassBackdropMode.DEEP_FROST) {
-        1.38f
-    } else {
-        1.0f
-    }
-    val cardBlurPx = with(density) { (uiState.deviceProfile.cardBlurDp * blurMultiplier).dp.toPx() }
-    val barBlurPx = with(density) { (uiState.deviceProfile.barBlurDp * blurMultiplier).dp.toPx() }
+    val cardBlurPx = with(density) { uiState.deviceProfile.cardBlurDp.dp.toPx() }
+    val barBlurPx = with(density) { uiState.deviceProfile.barBlurDp.dp.toPx() }
 
     LaunchedEffect(
         wallpaperBlurredLayer,
         sceneBlurredLayer,
-        webSceneBlurredLayer,
         cardBlurPx,
-        barBlurPx,
-        uiState.settings.frostedGlassEnabled
+        barBlurPx
     ) {
-        if (uiState.settings.frostedGlassEnabled) {
-            configureBlurLayer(wallpaperBlurredLayer, cardBlurPx)
-            configureBlurLayer(sceneBlurredLayer, barBlurPx)
-            configureBlurLayer(webSceneBlurredLayer, barBlurPx)
-        } else {
-            clearBlurLayer(wallpaperBlurredLayer)
-            clearBlurLayer(sceneBlurredLayer)
-            clearBlurLayer(webSceneBlurredLayer)
-        }
+        configureBlurLayer(wallpaperBlurredLayer, cardBlurPx)
+        configureBlurLayer(sceneBlurredLayer, barBlurPx)
     }
 
     val activeTab = uiState.activeTab
-    val activeWebSnapshot = activeTab?.let { viewModel.tabSnapshots[it.id] }
-    val activeWebBlurredSnapshot = activeTab?.let { viewModel.tabBlurredSnapshots[it.id] }
+    val webBlurredBackdrop = viewModel.liveWebBlurredBackdrop
 
     val spatialBackdrop = remember(
         wallpaperBlurredLayer,
         sceneBlurredLayer,
-        webSceneBlurredLayer,
         uiState.isViewingWebPage,
-        uiState.settings.frostedGlassEnabled,
-        uiState.settings.glassBackdropMode,
+        webBlurredBackdrop,
         uiState.resolvedWallpaper?.blurredBitmap,
-        activeWebSnapshot,
-        activeWebBlurredSnapshot,
-        rootSize
+        rootSize,
+        glassMotionTracker
     ) {
-        when {
-            !uiState.settings.frostedGlassEnabled -> SpatialBackdropState(
+        if (uiState.isViewingWebPage) {
+            SpatialBackdropState(
                 wallpaperBlurredLayer = null,
                 sceneBlurredLayer = null,
-                fallbackBlurredBitmap = null,
-                fallbackCardBlurredBitmap = null,
-                backdropMode = uiState.settings.glassBackdropMode,
-                rootSize = rootSize
+                fallbackBlurredBitmap = webBlurredBackdrop ?: uiState.resolvedWallpaper?.blurredBitmap,
+                isWebBackdrop = webBlurredBackdrop != null,
+                rootSize = rootSize,
+                motionTracker = glassMotionTracker
             )
-            uiState.isViewingWebPage -> SpatialBackdropState(
-                wallpaperBlurredLayer = if (activeWebSnapshot != null) webSceneBlurredLayer else null,
-                sceneBlurredLayer = if (activeWebSnapshot != null) webSceneBlurredLayer else null,
-                fallbackBlurredBitmap = activeWebBlurredSnapshot,
-                fallbackCardBlurredBitmap = activeWebBlurredSnapshot,
-                backdropMode = uiState.settings.glassBackdropMode,
-                rootSize = rootSize
-            )
-            else -> SpatialBackdropState(
+        } else {
+            SpatialBackdropState(
                 wallpaperBlurredLayer = wallpaperBlurredLayer,
                 sceneBlurredLayer = sceneBlurredLayer,
                 fallbackBlurredBitmap = uiState.resolvedWallpaper?.blurredBitmap,
-                fallbackCardBlurredBitmap = uiState.resolvedWallpaper?.blurredBitmap,
-                backdropMode = uiState.settings.glassBackdropMode,
-                rootSize = rootSize
+                isWebBackdrop = false,
+                rootSize = rootSize,
+                motionTracker = glassMotionTracker
             )
         }
     }
@@ -329,10 +290,11 @@ fun GlassBrowserApp(
 
     val statusTopInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val isSiriBusy = uiState.siriAiState is SiriAiUiState.Loading ||
+        uiState.siriAiState is SiriAiUiState.Streaming
 
     GlassBrowserTheme(
-        darkTheme = uiState.settings.isDarkMode,
-        frostedGlassEnabled = uiState.settings.frostedGlassEnabled
+        darkTheme = uiState.settings.isDarkMode
     ) {
         val style = LocalGlassStyle.current
 
@@ -361,40 +323,6 @@ fun GlassBrowserApp(
                         )
                 ) {
                     if (activeTab != null && activeTab.url.isNotBlank()) {
-                        // Offscreen settled webpage backdrop recorder (draws 0 pixels to screen, 0 touch interception, 0 active-scroll work)
-                        if (uiState.settings.frostedGlassEnabled && activeWebSnapshot != null) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .drawWithContent {
-                                        val bmp = activeWebSnapshot
-                                        if (size.width > 0f && size.height > 0f && bmp.width > 0 && bmp.height > 0) {
-                                            webSceneBlurredLayer.record {
-                                                val scale = maxOf(
-                                                    size.width / bmp.width.coerceAtLeast(1),
-                                                    size.height / bmp.height.coerceAtLeast(1)
-                                                )
-                                                val dstW = (bmp.width * scale).roundToInt()
-                                                val dstH = (bmp.height * scale).roundToInt()
-                                                val offsetX = ((size.width - dstW) / 2f).roundToInt()
-                                                val offsetY = ((size.height - dstH) / 2f).roundToInt()
-                                                drawImage(
-                                                    image = bmp,
-                                                    dstOffset = IntOffset(offsetX, offsetY),
-                                                    dstSize = IntSize(dstW, dstH)
-                                                )
-                                            }
-                                        }
-                                    }
-                            )
-                        }
-
-                        val isAnyModalBackdropOpen = uiState.isAddressOverlayOpen ||
-                            uiState.isSettingsSheetOpen ||
-                            uiState.isGoogleSignInSheetOpen ||
-                            isNewGroupDialogOpen
-
-                        // Viewing a live site: Dedicated isolated WebView composite layer
                         WebBrowserView(
                             tabId = activeTab.id,
                             url = activeTab.url,
@@ -402,10 +330,7 @@ fun GlassBrowserApp(
                             forceGpuRendering = uiState.settings.forceGpuRendering,
                             enableGpuRasterization = uiState.settings.enableGpuRasterization,
                             disableHardwareOverlays = uiState.settings.disableHardwareOverlays,
-                            disableGpuVsync = uiState.settings.disableGpuVsync,
-                            disableFrameRateLimit = uiState.settings.disableFrameRateLimit,
                             isTabSwitcherOpen = uiState.isTabSwitcherOpen,
-                            isOverlayBackdropRequested = isAnyModalBackdropOpen,
                             deviceProfile = uiState.deviceProfile,
                             webCommand = webCommand,
                             onConsumeCommand = viewModel::consumeWebCommand,
@@ -413,60 +338,59 @@ fun GlassBrowserApp(
                             onProgressChanged = viewModel::onWebProgressChanged,
                             onPageFinished = viewModel::onWebPageFinished,
                             onVideoPlaybackChanged = viewModel::onWebVideoPlaybackChanged,
-                            onGoogleSessionSync = viewModel::syncGoogleWebSessionFromPage,
                             onSnapshotCaptured = viewModel::updateTabSnapshot,
+                            onLiveBackdropCaptured = viewModel::updateLiveWebBackdropOnly,
+                            onFindResultsUpdated = viewModel::onFindResultsUpdated,
+                            onSslSummaryUpdated = viewModel::updateSslCertificateSummary,
+                            onPageAiContextUpdated = viewModel::updatePageAiContext,
+                            onDownloadRequested = viewModel::startWebOrDirectDownload,
+                            onSaveBlobDownload = viewModel::saveBlobBase64Download,
+                            onOpenUrlInNewTab = viewModel::openUrlInNewTab,
+                            onAskSiriAboutUrl = { targetUrl ->
+                                viewModel.submitSiriPrompt(
+                                    "Explain what this link or resource is in context of the page: $targetUrl"
+                                )
+                            },
+                            onCopyUrl = { linkUrl -> viewModel.copyUrlToClipboard(context, linkUrl) },
                             onEdgeBounce = viewModel.feedback::onEdgeBounce,
                             modifier = Modifier.fillMaxSize()
                         )
                     } else {
-                        // OS Home / Start Page Hub: Render 100% Untinted Backdrop Wallpaper + Hub Content
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .then(
-                                    if (uiState.settings.frostedGlassEnabled) {
-                                        Modifier.drawWithContent {
-                                            drawContent()
-                                            sceneBlurredLayer.record {
-                                                this@drawWithContent.drawContent()
-                                            }
-                                        }
-                                    } else {
-                                        Modifier
+                                .drawWithContent {
+                                    drawContent()
+                                    sceneBlurredLayer.record {
+                                        this@drawWithContent.drawContent()
                                     }
-                                )
+                                }
                         ) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .graphicsLayer()
-                                    .then(
-                                        if (uiState.settings.frostedGlassEnabled) {
-                                            Modifier.drawWithContent {
-                                                drawContent()
-                                                wallpaperBlurredLayer.record {
-                                                    this@drawWithContent.drawContent()
-                                                }
-                                            }
-                                        } else {
-                                            Modifier
+                                    .drawWithContent {
+                                        drawContent()
+                                        wallpaperBlurredLayer.record {
+                                            this@drawWithContent.drawContent()
                                         }
-                                    )
+                                    }
                             ) {
                                 val resolvedWp = uiState.resolvedWallpaper
                                 if (resolvedWp != null) {
                                     Image(
                                         bitmap = resolvedWp.fullBitmap,
                                         contentDescription = null,
-                                        colorFilter = null, // Strictly untinted!
+                                        colorFilter = null,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 } else {
                                     Image(
-                                        painter = painterResource(id = R.drawable.img_prism_waves),
+                                        painter = painterResource(id = R.drawable.wp_forest_canopy),
                                         contentDescription = null,
-                                        colorFilter = null, // Strictly untinted!
+                                        colorFilter = null,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
                                     )
@@ -484,6 +408,14 @@ fun GlassBrowserApp(
                                 onDeleteReadingItem = viewModel::removeReadingListItem,
                                 onDeleteBookmark = viewModel::removeBookmark,
                                 onClearHistory = viewModel::clearBrowsingHistory,
+                                onStartDirectDownload = { directUrl ->
+                                    viewModel.startWebOrDirectDownload(url = directUrl)
+                                },
+                                onOpenDownload = { item -> viewModel.openDownloadItem(context, item) },
+                                onShareDownload = { item -> viewModel.shareDownloadItem(context, item) },
+                                onRetryDownload = viewModel::retryDownloadItem,
+                                onDeleteDownload = viewModel::deleteDownloadItem,
+                                onClearCompletedDownloads = viewModel::clearCompletedDownloads,
                                 onEdgeBounce = viewModel.feedback::onEdgeBounce
                             )
                         }
@@ -491,10 +423,10 @@ fun GlassBrowserApp(
                 }
 
                 // =========================================================================
-                // PLANE 2: Floating Spatial Frosted Glass Chrome & Bouncy Overlays
+                // PLANE 2: Floating Spatial Frosted Glass Chrome, WebView Tools & Siri iOS 26
                 // =========================================================================
 
-                // Top 4-Icon Segmented Glass Pill (visible on Start Page / Hub sections)
+                // Top 5-Segment Glass Pill (Start Page | Bookmarks | Reading List | History | Downloads)
                 AnimatedVisibility(
                     visible = !uiState.isViewingWebPage && !uiState.isTabSwitcherOpen,
                     enter = fadeIn(spring(stiffness = 400f)) +
@@ -511,15 +443,37 @@ fun GlassBrowserApp(
                 ) {
                     TopSegmentedGlassBar(
                         activeSection = uiState.activeSection,
+                        activeDownloadsCount = uiState.activeDownloadsCount,
                         onSelectSection = viewModel::selectTopSection
                     )
                 }
 
-                // Bottom Floating Browser Glass Bar (Back + Search/URL Pill + Tabs Button)
-                // Smoothly slides downward off-screen whenever a video is playing on the active site!
+                // Floating & Draggable Find-in-Page Frosted Bar when viewing a webpage
+                AnimatedVisibility(
+                    visible = uiState.isViewingWebPage &&
+                        uiState.isFindInPageOpen &&
+                        !uiState.isTabSwitcherOpen,
+                    enter = fadeIn(spring(stiffness = 420f)) +
+                        slideInVertically(initialOffsetY = { -it }),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { -it }),
+                    modifier = Modifier.align(Alignment.TopCenter)
+                ) {
+                    FindInPageGlassBar(
+                        query = uiState.findQuery,
+                        activeMatchOrdinal = uiState.findActiveMatch,
+                        totalMatches = uiState.findTotalMatches,
+                        onQueryChange = viewModel::updateFindQuery,
+                        onFindPrev = { viewModel.findNextMatch(forward = false) },
+                        onFindNext = { viewModel.findNextMatch(forward = true) },
+                        onClose = viewModel::closeFindInPage
+                    )
+                }
+
+                // Bottom Floating & Movable Browser Glass Bar (Back + Search/URL + Siri Orb + Tabs)
                 val isBottomBarVisible = !uiState.isTabSwitcherOpen &&
                     !uiState.isAddressOverlayOpen &&
-                    !uiState.isGoogleSignInSheetOpen &&
+                    !uiState.isSiriOpen &&
                     !(uiState.isViewingWebPage && uiState.isVideoPlaying)
 
                 AnimatedVisibility(
@@ -544,15 +498,17 @@ fun GlassBrowserApp(
                         isLoading = uiState.isLoadingWebPage,
                         loadProgress = uiState.webLoadProgress,
                         isPrivateMode = uiState.settings.isPrivateMode,
+                        isSiriActive = uiState.isSiriOpen || isSiriBusy,
                         onBackClick = viewModel::onBackButtonClicked,
                         onAddressBarClick = viewModel::openAddressOverlay,
-                        onReloadOrVoiceClick = {
+                        onWebToolsOrVoiceClick = {
                             if (uiState.isViewingWebPage) {
-                                viewModel.reloadCurrentPage()
+                                viewModel.setWebToolsSheetOpen(true)
                             } else {
-                                viewModel.openAddressOverlay()
+                                viewModel.toggleSiriOverlay()
                             }
                         },
+                        onSiriClick = viewModel::toggleSiriOverlay,
                         onTabsClick = viewModel::openTabSwitcher,
                         modifier = Modifier
                             .navigationBarsPadding()
@@ -560,7 +516,7 @@ fun GlassBrowserApp(
                     )
                 }
 
-                // Full-Screen Frosted Glass Tab Switcher Overlay (Reference Image 1)
+                // Full-Screen Frosted Glass Tab Switcher Overlay
                 AnimatedVisibility(
                     visible = uiState.isTabSwitcherOpen,
                     enter = fadeIn(spring(stiffness = 420f)) +
@@ -610,8 +566,56 @@ fun GlassBrowserApp(
                         onAddToReadingList = viewModel::saveCurrentPageToReadingList,
                         onAddBookmark = viewModel::saveCurrentPageToBookmarks,
                         onReloadPage = viewModel::reloadCurrentPage,
+                        onOpenSiriAi = viewModel::toggleSiriOverlay,
+                        onOpenDownloads = viewModel::openDownloadsHub,
                         onOpenSettings = { viewModel.setSettingsSheetOpen(true) },
                         onDismiss = viewModel::closeAddressOverlay
+                    )
+                }
+
+                // WebView Components & Page Controls Frosted Sheet
+                AnimatedVisibility(
+                    visible = uiState.isWebToolsSheetOpen,
+                    enter = fadeIn(spring(stiffness = 420f)) +
+                        slideInVertically(
+                            initialOffsetY = { it / 2 },
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 360f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { it / 2 })
+                ) {
+                    WebToolsGlassSheet(
+                        currentUrl = uiState.activeTab?.url.orEmpty(),
+                        pageTitle = uiState.activeTab?.title.orEmpty(),
+                        sslCertificateSummary = uiState.sslCertificateSummary,
+                        canGoForward = uiState.canWebGoForward,
+                        isLoading = uiState.isLoadingWebPage,
+                        isDesktopMode = uiState.isDesktopMode,
+                        isReaderMode = uiState.isReaderMode,
+                        textZoomPercent = uiState.webTextZoom,
+                        activeDownloadsCount = uiState.activeDownloadsCount,
+                        onGoForward = viewModel::goForwardWebPage,
+                        onReloadOrStop = viewModel::stopOrReloadWebPage,
+                        onToggleDesktopMode = viewModel::toggleDesktopMode,
+                        onToggleReaderMode = viewModel::toggleReaderMode,
+                        onChangeTextZoom = viewModel::updateWebTextZoom,
+                        onOpenFindInPage = viewModel::openFindInPage,
+                        onOpenSiriAi = viewModel::toggleSiriOverlay,
+                        onOpenDownloadsHub = viewModel::openDownloadsHub,
+                        onCopyUrl = {
+                            viewModel.copyUrlToClipboard(
+                                context = context,
+                                url = uiState.activeTab?.url.orEmpty()
+                            )
+                        },
+                        onSharePage = {
+                            viewModel.sharePageUrl(
+                                context = context,
+                                title = uiState.activeTab?.title.orEmpty(),
+                                url = uiState.activeTab?.url.orEmpty()
+                            )
+                        },
+                        onDismiss = { viewModel.setWebToolsSheetOpen(false) }
                     )
                 }
 
@@ -631,11 +635,6 @@ fun GlassBrowserApp(
                         displayCapability = displayCapability,
                         osRoleStatus = osRoleStatus,
                         onSelectDarkMode = viewModel::setDarkMode,
-                        onToggleFrostedGlass = viewModel::setFrostedGlassEnabled,
-                        onSelectBackdropMode = viewModel::setGlassBackdropMode,
-                        onGoogleSignInClick = viewModel::openGoogleSignInSheet,
-                        onGoogleManageAccountClick = viewModel::openGoogleAccountManagement,
-                        onGoogleSignOutClick = viewModel::signOutGoogleAccount,
                         onSelectWallpaper = viewModel::selectWallpaper,
                         onImportWallpaperClick = {
                             photoPickerLauncher.launch(
@@ -671,8 +670,6 @@ fun GlassBrowserApp(
                         },
                         onToggleImmersiveOsMode = viewModel::setImmersiveOsMode,
                         onToggleHighRefresh = viewModel::setHighRefreshRateEnabled,
-                        onToggleDisableGpuVsync = viewModel::setDisableGpuVsync,
-                        onToggleDisableFrameRateLimit = viewModel::setDisableFrameRateLimit,
                         onToggleForceGpu = viewModel::setForceGpuRendering,
                         onToggleGpuRasterization = viewModel::setEnableGpuRasterization,
                         onToggleDisableHwOverlays = viewModel::setDisableHardwareOverlays,
@@ -681,23 +678,6 @@ fun GlassBrowserApp(
                         onCloseAllTabs = viewModel::closeAllCurrentModeTabs,
                         onEdgeBounce = viewModel.feedback::onEdgeBounce,
                         onDismiss = { viewModel.setSettingsSheetOpen(false) }
-                    )
-                }
-
-                // In-Browser Shared-Session Google Account Sign-In Sheet
-                AnimatedVisibility(
-                    visible = uiState.isGoogleSignInSheetOpen,
-                    enter = fadeIn(spring(stiffness = 420f)) +
-                        slideInVertically(
-                            initialOffsetY = { it / 2 },
-                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 360f)
-                        ),
-                    exit = fadeOut(spring(stiffness = 480f)) +
-                        slideOutVertically(targetOffsetY = { it / 2 })
-                ) {
-                    GoogleAccountSignInOverlay(
-                        onSignInCompleted = viewModel::onGoogleSignInCompleted,
-                        onDismiss = viewModel::closeGoogleSignInSheet
                     )
                 }
 
@@ -713,6 +693,46 @@ fun GlassBrowserApp(
                     NewTabGroupDialog(
                         onConfirmGroup = viewModel::createTabGroupFromCurrentOrNew,
                         onDismiss = { isNewGroupDialogOpen = false }
+                    )
+                }
+
+                // iOS 26 Siri Full-Viewport Perimeter Aura (Zero Pointer Interception)
+                SiriIos26PerimeterAura(
+                    visible = uiState.isSiriOpen || isSiriBusy,
+                    isIntense = isSiriBusy
+                )
+
+                // iOS 26 Siri Movable Liquid-Glass Conversational Card & Type-to-Siri Pill
+                AnimatedVisibility(
+                    visible = uiState.isSiriOpen,
+                    enter = fadeIn(spring(stiffness = 420f)) +
+                        slideInVertically(
+                            initialOffsetY = { it / 2 },
+                            animationSpec = spring(dampingRatio = 0.66f, stiffness = 360f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { it / 2 }),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                ) {
+                    SiriIos26AssistantOverlay(
+                        aiState = uiState.siriAiState,
+                        chatHistory = uiState.siriHistory,
+                        isViewingWebPage = uiState.isViewingWebPage,
+                        activePageTitle = uiState.activeTab?.title.orEmpty(),
+                        onSubmitPrompt = { prompt -> viewModel.submitSiriPrompt(prompt) },
+                        onSummarizePage = viewModel::summarizeCurrentPage,
+                        onAnalyzeVisualScreen = viewModel::analyzeVisualScreen,
+                        onKeyTakeaways = viewModel::extractKeyTakeaways,
+                        onSmartDigest = viewModel::generateSmartDigest,
+                        onTranslatePage = viewModel::translateCurrentPageSummary,
+                        onOpenSuggestedUrl = { suggested ->
+                            viewModel.closeSiriOverlay()
+                            viewModel.openUrlOrSearch(suggested)
+                        },
+                        onCancelGeneration = viewModel::cancelSiriGeneration,
+                        onClearConversation = viewModel::clearSiriConversation,
+                        onDismiss = viewModel::closeSiriOverlay,
+                        onVoiceUnavailableToast = viewModel::showToast
                     )
                 }
 

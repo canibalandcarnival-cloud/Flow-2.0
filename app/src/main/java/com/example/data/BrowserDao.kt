@@ -108,4 +108,27 @@ interface BrowserDao {
 
     @Query("DELETE FROM custom_wallpapers WHERE id = :id")
     suspend fun deleteCustomWallpaperById(id: Long)
+
+    // Downloads
+    @Query("SELECT * FROM downloads ORDER BY createdAt DESC, id DESC")
+    fun observeDownloads(): Flow<List<DownloadItemEntity>>
+
+    @Query("SELECT * FROM downloads WHERE status IN ('RUNNING', 'PAUSED') ORDER BY createdAt DESC")
+    suspend fun getActiveDownloads(): List<DownloadItemEntity>
+
+    @Query("SELECT * FROM downloads WHERE id = :id LIMIT 1")
+    suspend fun getDownloadById(id: Long): DownloadItemEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDownload(item: DownloadItemEntity): Long
+
+    @Update
+    suspend fun updateDownload(item: DownloadItemEntity)
+
+    @Query("DELETE FROM downloads WHERE id = :id")
+    suspend fun deleteDownloadById(id: Long)
+
+    @Query("DELETE FROM downloads WHERE status IN ('SUCCESSFUL', 'FAILED')")
+    suspend fun clearCompletedDownloads()
 }
+

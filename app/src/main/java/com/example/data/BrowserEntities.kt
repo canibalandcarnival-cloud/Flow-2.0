@@ -64,3 +64,19 @@ data class CustomWallpaperEntity(
     val isLight: Boolean,
     val addedAt: Long = System.currentTimeMillis()
 )
+
+@Entity(tableName = "downloads")
+data class DownloadItemEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val systemDownloadId: Long = -1L,
+    val fileName: String,
+    val url: String,
+    val mimeType: String = "application/octet-stream",
+    val localUri: String = "",
+    val localFilePath: String = "",
+    val totalBytes: Long = -1L,
+    val downloadedBytes: Long = 0L,
+    val status: String = "RUNNING", // "RUNNING", "PAUSED", "SUCCESSFUL", "FAILED"
+    val createdAt: Long = System.currentTimeMillis()
+)
+

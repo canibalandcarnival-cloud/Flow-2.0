@@ -12,9 +12,10 @@ import androidx.room.RoomDatabase
         BookmarkEntity::class,
         HistoryEntryEntity::class,
         BrowserTabEntity::class,
-        CustomWallpaperEntity::class
+        CustomWallpaperEntity::class,
+        DownloadItemEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class BrowserDatabase : RoomDatabase() {

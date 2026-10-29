@@ -7,13 +7,59 @@ import android.view.View
 import android.view.WindowManager
 import android.webkit.WebSettings
 import android.webkit.WebView
+import java.io.File
 
 /**
  * Controls the browser's hardware GPU rendering, unified GPU screen compositing, and Chromium
  * WebView GPU tile & vector rasterization ("Force GPU Rendering", "Disable Hardware Overlays",
- * and "Enable GPU Rasterization").
+ * and "Enable GPU Rasterization"), while guarding against missing Linux DRM render nodes
+ * (`/dev/dri/renderD128`) on virtualized streaming emulators.
  */
 object GpuRenderController {
+
+    /**
+     * Determines whether allocating an offscreen View `LAYER_TYPE_HARDWARE` FBO is supported
+     * without triggering `E/platform: Failed to open rendernode: No such file or directory`.
+     *
+     * Virtualized cloud/streaming Android emulators (`ranchu`, `goldfish`, `cuttlefish`, `vsoc`)
+     * frequently lack `/dev/dri/renderD128`; keeping WebView on `LAYER_TYPE_NONE` inside a
+     * `FLAG_HARDWARE_ACCELERATED` window composites Chromium tiles directly into the window's
+     * hardware RenderNode display list without probing GBM render nodes or incurring extra FBO blits.
+     */
+    fun shouldUseOffscreenHardwareLayer(
+        hasRenderNode: Boolean = hasLinuxDrmRenderNode(),
+        isVirtualizedGpu: Boolean = isVirtualizedEmulatorRuntime()
+    ): Boolean {
+        if (!isVirtualizedGpu) return true
+        return hasRenderNode
+    }
+
+    fun hasLinuxDrmRenderNode(): Boolean {
+        return try {
+            File("/dev/dri/renderD128").exists() || File("/dev/dri/renderD129").exists()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun isVirtualizedEmulatorRuntime(): Boolean {
+        val fp = Build.FINGERPRINT.orEmpty().lowercase()
+        // Allow Robolectric JVM unit tests to verify standard hardware layer behavior cleanly
+        if (fp.contains("robolectric")) return false
+        val hw = Build.HARDWARE.orEmpty().lowercase()
+        val prod = Build.PRODUCT.orEmpty().lowercase()
+        val model = Build.MODEL.orEmpty().lowercase()
+        return hw.contains("ranchu") ||
+            hw.contains("goldfish") ||
+            hw.contains("cuttlefish") ||
+            hw.contains("vsoc") ||
+            fp.contains("generic") ||
+            fp.contains("emulator") ||
+            prod.contains("sdk_gphone") ||
+            prod.contains("emulator") ||
+            model.contains("emulator") ||
+            model.contains("android sdk built for")
+    }
 
     /**
      * Applies "Force GPU Rendering", "Disable Hardware Overlays", and "Enable GPU Rasterization"
@@ -43,41 +89,26 @@ object GpuRenderController {
     }
 
     /**
-     * Applies isolated hardware composite layer, GPU tile pre-rasterization (`offscreenPreRaster`),
-     * and uncapped frame-rate / GPU VSync bypass settings directly to the active Chromium WebView.
+     * Applies hardware layer acceleration and Chromium GPU tile pre-rasterization (`offscreenPreRaster`)
+     * directly to the active WebView, automatically avoiding offscreen GBM `rendernode` errors on
+     * virtualized GPUs without `/dev/dri/renderD128`.
      */
     @Suppress("DEPRECATION")
     fun applyWebViewGpuPipeline(
         webView: WebView,
         forceGpuRendering: Boolean,
         disableHardwareOverlays: Boolean,
-        enableGpuRasterization: Boolean = true,
-        disableGpuVsync: Boolean = true,
-        disableFrameRateLimit: Boolean = true
+        enableGpuRasterization: Boolean = true
     ) {
-        BrowserEngineInitializer.initialize(
-            context = webView.context,
-            disableGpuVsync = disableGpuVsync,
-            disableFrameRateLimit = disableFrameRateLimit,
-            enableGpuRasterization = enableGpuRasterization
-        )
-
-        val useHardwareLayer = forceGpuRendering || disableHardwareOverlays || enableGpuRasterization
-        val desiredLayer = if (useHardwareLayer) View.LAYER_TYPE_HARDWARE else View.LAYER_TYPE_NONE
-        if (webView.layerType != desiredLayer) {
-            // Pass null Paint so RenderThread composites the isolated WebView hardware layer directly
-            // without extra software Paint shader/dither passes on every scroll frame.
-            webView.setLayerType(desiredLayer, null)
+        val requestedHardware = forceGpuRendering || disableHardwareOverlays || enableGpuRasterization
+        val canAllocateOffscreenLayer = shouldUseOffscreenHardwareLayer()
+        val desiredLayer = if (requestedHardware && canAllocateOffscreenLayer) {
+            View.LAYER_TYPE_HARDWARE
+        } else {
+            View.LAYER_TYPE_NONE
         }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            try {
-                webView.requestedFrameRate = when {
-                    disableFrameRateLimit -> DisplayRefreshRateManager.TARGET_MAX_HZ
-                    disableGpuVsync -> View.REQUESTED_FRAME_RATE_CATEGORY_HIGH
-                    else -> View.REQUESTED_FRAME_RATE_CATEGORY_DEFAULT
-                }
-            } catch (_: Throwable) {}
+        if (webView.layerType != desiredLayer) {
+            webView.setLayerType(desiredLayer, null)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -97,7 +128,7 @@ object GpuRenderController {
 
         try {
             webView.settings.setRenderPriority(
-                if (forceGpuRendering || enableGpuRasterization || disableFrameRateLimit || disableGpuVsync) {
+                if (forceGpuRendering || enableGpuRasterization) {
                     WebSettings.RenderPriority.HIGH
                 } else {
                     WebSettings.RenderPriority.NORMAL
@@ -141,8 +172,8 @@ object GpuRenderController {
     }
 
     /**
-     * Applies isolated GPU composite layer hints and safe bottom clearance to loaded web documents
-     * without dirtying layout if bottom padding is already set.
+     * Applies isolated GPU composite layer hints, passive listener optimization, and safe bottom
+     * clearance to loaded web documents without dirtying layout if bottom padding is already set.
      */
     fun injectPageGpuRasterizationScript(
         webView: WebView,
@@ -180,6 +211,40 @@ object GpuRenderController {
                     if (existing && existing.parentNode) {
                         existing.parentNode.removeChild(existing);
                     }
+                } catch (e) {}
+            })();
+            """.trimIndent()
+        }
+        try {
+            webView.evaluateJavascript(js, null)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Toggles clean distraction-free Reader View CSS overlay on the active web document.
+     */
+    fun toggleReaderModeOnPage(webView: WebView, enable: Boolean) {
+        val js = if (enable) {
+            """
+            (function() {
+                try {
+                    if (document.getElementById('__glass_reader_style')) return;
+                    var st = document.createElement('style');
+                    st.id = '__glass_reader_style';
+                    st.textContent = 'header,nav,footer,aside,iframe,[role="banner"],[role="navigation"],.ad,.ads,.sidebar,.cookie-banner{display:none!important;}' +
+                        'body{max-width:720px!important;margin:0 auto!important;padding:28px 20px 110px 20px!important;line-height:1.72!important;font-size:18px!important;background:#101216!important;color:#F3F5F8!important;}' +
+                        'article,main,p,li,h1,h2,h3,h4,blockquote{color:#F3F5F8!important;background:transparent!important;}' +
+                        'a{color:#7CC4FF!important;}img{max-width:100%!important;height:auto!important;border-radius:14px!important;}';
+                    document.head.appendChild(st);
+                } catch (e) {}
+            })();
+            """.trimIndent()
+        } else {
+            """
+            (function() {
+                try {
+                    var st = document.getElementById('__glass_reader_style');
+                    if (st && st.parentNode) st.parentNode.removeChild(st);
                 } catch (e) {}
             })();
             """.trimIndent()

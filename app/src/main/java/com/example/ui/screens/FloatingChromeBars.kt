@@ -24,12 +24,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Schedule
@@ -41,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,15 +57,17 @@ import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
 import com.example.ui.components.OverlappingTabsIcon
 import com.example.ui.components.bouncyClickable
+import com.example.ui.components.draggableGlassSurface
 import com.example.ui.theme.LocalGlassStyle
 
 /**
- * Top floating 4-segment frosted glass capsule pill matching Reference Image 2:
- * [Grid / Start Page] | [Book / Bookmarks] | [Eyeglasses / Reading List] | [Clock / History]
+ * Top floating 5-segment frosted glass capsule pill:
+ * [Start Page] | [Bookmarks] | [Reading List] | [History] | [Downloads]
  */
 @Composable
 fun TopSegmentedGlassBar(
     activeSection: TopHubSection,
+    activeDownloadsCount: Int = 0,
     onSelectSection: (TopHubSection) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -100,7 +105,7 @@ fun TopSegmentedGlassBar(
                     label = "topPillIndicatorOffset"
                 )
 
-                // Sliding active frosted monochrome capsule
+                // Sliding active frosted capsule
                 Box(
                     modifier = Modifier
                         .offset(x = indicatorOffset)
@@ -122,6 +127,7 @@ fun TopSegmentedGlassBar(
                             TopHubSection.BOOKMARKS -> stringResource(R.string.bookmarks_title)
                             TopHubSection.READING_LIST -> stringResource(R.string.reading_list_title)
                             TopHubSection.HISTORY -> stringResource(R.string.history_title)
+                            TopHubSection.DOWNLOADS -> stringResource(R.string.downloads_title)
                         }
 
                         Box(
@@ -141,24 +147,42 @@ fun TopSegmentedGlassBar(
                                     imageVector = if (isSelected) Icons.Rounded.Apps else Icons.Outlined.Apps,
                                     contentDescription = labelDesc,
                                     tint = iconTint,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(21.dp)
                                 )
                                 TopHubSection.BOOKMARKS -> Icon(
                                     imageVector = if (isSelected) Icons.Rounded.MenuBook else Icons.Outlined.MenuBook,
                                     contentDescription = labelDesc,
                                     tint = iconTint,
-                                    modifier = Modifier.size(21.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                                 TopHubSection.READING_LIST -> EyeglassesIcon(
                                     tint = iconTint,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(23.dp)
                                 )
                                 TopHubSection.HISTORY -> Icon(
                                     imageVector = if (isSelected) Icons.Rounded.Schedule else Icons.Outlined.Schedule,
                                     contentDescription = labelDesc,
                                     tint = iconTint,
-                                    modifier = Modifier.size(21.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
+                                TopHubSection.DOWNLOADS -> Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (isSelected) Icons.Rounded.Download else Icons.Outlined.Download,
+                                        contentDescription = labelDesc,
+                                        tint = iconTint,
+                                        modifier = Modifier.size(21.dp)
+                                    )
+                                    if (activeDownloadsCount > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .offset(x = 3.dp, y = (-2).dp)
+                                                .size(7.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF36E2FF))
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -169,8 +193,11 @@ fun TopSegmentedGlassBar(
 }
 
 /**
- * Bottom floating frosted glass browser bar matching Reference Image 2:
- * [ < Circular Glass Button ]  [ Q Search or enter website  Mic ]  [ Tabs Circular Glass Button ]
+ * Bottom floating & movable frosted-glass browser bar:
+ * [ < Back ]  [ Search / Domain + WebTools ]  [ Siri iOS 26 Orb ]  [ Tabs ]
+ *
+ * Supports smooth drag repositioning (`draggableGlassSurface`) so moving the bar dynamically
+ * refracts the live webpage or wallpaper directly underneath it!
  */
 @Composable
 fun BottomBrowserGlassBar(
@@ -179,9 +206,11 @@ fun BottomBrowserGlassBar(
     isLoading: Boolean,
     loadProgress: Float,
     isPrivateMode: Boolean,
+    isSiriActive: Boolean = false,
     onBackClick: () -> Unit,
     onAddressBarClick: () -> Unit,
-    onReloadOrVoiceClick: () -> Unit,
+    onWebToolsOrVoiceClick: () -> Unit,
+    onSiriClick: () -> Unit,
     onTabsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -195,12 +224,17 @@ fun BottomBrowserGlassBar(
 
     BoxWithConstraints(
         contentAlignment = Alignment.Center,
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .draggableGlassSurface(
+                maxHorizontalOffsetPx = 320f,
+                maxVerticalOffsetPx = 900f
+            )
     ) {
         val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (metrics.isUltraCompactPhone) 8.dp else 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (metrics.isUltraCompactPhone) 6.dp else 8.dp),
             modifier = Modifier
                 .widthIn(max = metrics.chromeBarMaxWidth)
                 .fillMaxWidth()
@@ -248,22 +282,22 @@ fun BottomBrowserGlassBar(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 16.dp)
+                            .padding(start = 14.dp, end = 6.dp)
                     ) {
                         Icon(
                             imageVector = if (isWebActive) Icons.Rounded.Lock else Icons.Outlined.Search,
                             contentDescription = null,
                             tint = if (isWebActive) style.contentSecondary else style.contentPrimary,
-                            modifier = Modifier.size(if (isWebActive) 16.dp else 20.dp)
+                            modifier = Modifier.size(if (isWebActive) 15.dp else 19.dp)
                         )
 
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         val displayText = if (isWebActive) {
                             val domain = BrowserRepository.extractDomain(currentUrl)
                             if (isPrivateMode) "Private • $domain" else domain
                         } else {
-                            if (isPrivateMode) "Private • Search or enter web"
+                            if (isPrivateMode) "Private • Search or web"
                             else stringResource(R.string.search_or_enter_website)
                         }
 
@@ -276,28 +310,35 @@ fun BottomBrowserGlassBar(
                             modifier = Modifier.weight(1f)
                         )
 
-                        Spacer(modifier = Modifier.width(8.dp))
-
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(48.dp)
+                                .testTag("web_tools_or_voice_button")
                                 .bouncyClickable(
                                     pressedScale = 0.85f,
-                                    contentDescriptionText = stringResource(R.string.cd_voice_search),
-                                    onClick = onReloadOrVoiceClick
+                                    contentDescriptionText = if (isWebActive) {
+                                        stringResource(R.string.cd_web_tools_button)
+                                    } else {
+                                        stringResource(R.string.cd_voice_search)
+                                    },
+                                    onClick = onWebToolsOrVoiceClick
                                 )
                         ) {
                             Icon(
-                                imageVector = if (isWebActive) Icons.Outlined.Refresh else Icons.Outlined.MicNone,
-                                contentDescription = stringResource(R.string.cd_voice_search),
+                                imageVector = if (isWebActive) Icons.Outlined.MoreHoriz else Icons.Outlined.MicNone,
+                                contentDescription = if (isWebActive) {
+                                    stringResource(R.string.cd_web_tools_button)
+                                } else {
+                                    stringResource(R.string.cd_voice_search)
+                                },
                                 tint = style.contentPrimary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
                     }
 
-                    // Smooth monochrome loading progress bar inside capsule bottom edge
+                    // Smooth loading progress bar inside capsule bottom edge
                     if (animatedProgress > 0.01f && isLoading) {
                         Box(
                             modifier = Modifier
@@ -308,6 +349,26 @@ fun BottomBrowserGlassBar(
                         )
                     }
                 }
+            }
+
+            // Siri iOS 26 Liquid-Glass Orb Button
+            FrostedGlassBox(
+                shape = CircleShape,
+                elevation = GlassElevation.FLOATING_BAR,
+                useLiveSceneBackdrop = true,
+                modifier = Modifier
+                    .size(metrics.floatingActionSize)
+                    .testTag("siri_orb_glass_button")
+                    .bouncyClickable(
+                        pressedScale = 0.86f,
+                        contentDescriptionText = stringResource(R.string.cd_siri_orb_button),
+                        onClick = onSiriClick
+                    )
+            ) {
+                SiriLiquidOrbIcon(
+                    isThinking = isSiriActive,
+                    size = 26.dp
+                )
             }
 
             // Right Circular Frosted Tabs Button

@@ -8,7 +8,6 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -16,15 +15,10 @@ import androidx.compose.ui.unit.dp
 @Immutable
 data class GlassStyle(
     val isDark: Boolean,
-    val isFrostedGlassEnabled: Boolean = true,
     val glassBaseColor: Color,
     val barTintAlpha: Float,
     val cardTintAlpha: Float,
     val overlayTintAlpha: Float,
-    val solidCardSurface: Color,
-    val solidBarSurface: Color,
-    val solidOverlaySurface: Color,
-    val solidBorderColor: Color,
     val activeSegmentFill: Color,
     val solidActionFill: Color,
     val solidActionContent: Color,
@@ -38,15 +32,10 @@ data class GlassStyle(
 
 val DarkGlassStyle = GlassStyle(
     isDark = true,
-    isFrostedGlassEnabled = true,
     glassBaseColor = PureBlack,
     barTintAlpha = 0.44f,
     cardTintAlpha = 0.40f,
     overlayTintAlpha = 0.62f,
-    solidCardSurface = DarkSurfaceContainer,
-    solidBarSurface = DarkSurfaceElevated,
-    solidOverlaySurface = PureBlack,
-    solidBorderColor = PureWhite.copy(alpha = 0.18f),
     activeSegmentFill = PureWhite.copy(alpha = 0.20f),
     solidActionFill = PureWhite,
     solidActionContent = PureBlack,
@@ -60,15 +49,10 @@ val DarkGlassStyle = GlassStyle(
 
 val LightGlassStyle = GlassStyle(
     isDark = false,
-    isFrostedGlassEnabled = true,
     glassBaseColor = PureWhite,
     barTintAlpha = 0.56f,
     cardTintAlpha = 0.54f,
     overlayTintAlpha = 0.66f,
-    solidCardSurface = PureWhite,
-    solidBarSurface = PureWhite,
-    solidOverlaySurface = LightSurfaceElevated,
-    solidBorderColor = PureBlack.copy(alpha = 0.14f),
     activeSegmentFill = PureBlack.copy(alpha = 0.12f),
     solidActionFill = PureBlack,
     solidActionContent = PureWhite,
@@ -135,14 +119,10 @@ val BrowserShapes = Shapes(
 @Composable
 fun GlassBrowserTheme(
     darkTheme: Boolean,
-    frostedGlassEnabled: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) MonochromeDarkColorScheme else MonochromeLightColorScheme
-    val baseGlassStyle = if (darkTheme) DarkGlassStyle else LightGlassStyle
-    val glassStyle = remember(baseGlassStyle, frostedGlassEnabled) {
-        baseGlassStyle.copy(isFrostedGlassEnabled = frostedGlassEnabled)
-    }
+    val glassStyle = if (darkTheme) DarkGlassStyle else LightGlassStyle
 
     CompositionLocalProvider(LocalGlassStyle provides glassStyle) {
         MaterialTheme(

@@ -14,6 +14,7 @@ class BrowserRepository(
     val history: Flow<List<HistoryEntryEntity>> = dao.observeHistory()
     val tabs: Flow<List<BrowserTabEntity>> = dao.observeTabs()
     val customWallpapers: Flow<List<CustomWallpaperEntity>> = dao.observeCustomWallpapers()
+    val downloads: Flow<List<DownloadItemEntity>> = dao.observeDownloads()
     val settings: Flow<BrowserSettingsState> = preferences.settingsFlow
 
     suspend fun ensureSeeded(): Long {
@@ -397,31 +398,28 @@ class BrowserRepository(
         } catch (_: Throwable) {}
         dao.deleteCustomWallpaperById(entity.id)
         if (currentSelectedId == "custom:${entity.id}") {
-            preferences.setSelectedWallpaper("preset:prism_waves")
+            preferences.setSelectedWallpaper("preset:forest")
         }
     }
 
     suspend fun setDarkMode(dark: Boolean) = preferences.setDarkMode(dark)
-    suspend fun setFrostedGlassEnabled(enabled: Boolean) = preferences.setFrostedGlassEnabled(enabled)
-    suspend fun setGlassBackdropMode(mode: GlassBackdropMode) = preferences.setGlassBackdropMode(mode)
     suspend fun setSelectedWallpaper(id: String) = preferences.setSelectedWallpaper(id)
     suspend fun setSfxEnabled(enabled: Boolean) = preferences.setSfxEnabled(enabled)
     suspend fun setHapticsEnabled(enabled: Boolean) = preferences.setHapticsEnabled(enabled)
     suspend fun setHighRefreshRateEnabled(enabled: Boolean) = preferences.setHighRefreshRateEnabled(enabled)
-    suspend fun setDisableGpuVsync(enabled: Boolean) = preferences.setDisableGpuVsync(enabled)
-    suspend fun setDisableFrameRateLimit(enabled: Boolean) = preferences.setDisableFrameRateLimit(enabled)
     suspend fun setForceGpuRendering(enabled: Boolean) = preferences.setForceGpuRendering(enabled)
     suspend fun setEnableGpuRasterization(enabled: Boolean) = preferences.setEnableGpuRasterization(enabled)
     suspend fun setDisableHardwareOverlays(enabled: Boolean) = preferences.setDisableHardwareOverlays(enabled)
     suspend fun setImmersiveOsMode(enabled: Boolean) = preferences.setImmersiveOsMode(enabled)
     suspend fun setPrivateMode(isPrivate: Boolean, fallbackTabId: Long) =
         preferences.setActiveTab(fallbackTabId, isPrivate)
-    suspend fun setGoogleAccountSession(
-        signedIn: Boolean,
-        email: String = "",
-        name: String = "",
-        avatarUrl: String = ""
-    ) = preferences.setGoogleAccountSession(signedIn, email, name, avatarUrl)
+
+    suspend fun insertDownload(item: DownloadItemEntity): Long = dao.insertDownload(item)
+    suspend fun updateDownload(item: DownloadItemEntity) = dao.updateDownload(item)
+    suspend fun getDownloadById(id: Long): DownloadItemEntity? = dao.getDownloadById(id)
+    suspend fun getActiveDownloads(): List<DownloadItemEntity> = dao.getActiveDownloads()
+    suspend fun deleteDownload(id: Long) = dao.deleteDownloadById(id)
+    suspend fun clearCompletedDownloads() = dao.clearCompletedDownloads()
 
     companion object {
         fun normalizeUrlOrSearch(raw: String): String {

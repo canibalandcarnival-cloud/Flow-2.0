@@ -15,16 +15,8 @@
     <string name="appearance_section_title">Appearance</string>
     <string name="light_mode_label">Light</string>
     <string name="dark_mode_label">Dark</string>
-    <string name="frosted_glass_label">Frosted Glass</string>
-    <string name="frosted_glass_subtitle">Translucent optical blur across bars, cards &amp; sheets</string>
-    <string name="glass_backdrop_title">Glassmorphism Backdrop</string>
-    <string name="glass_backdrop_subtitle">Spatial refraction &amp; luminous depth behind frosted glass</string>
-    <string name="backdrop_mode_prism">Prism Aura</string>
-    <string name="backdrop_mode_live">Live Optical</string>
-    <string name="backdrop_mode_halo">Studio Halo</string>
-    <string name="backdrop_mode_deep">Deep Frost</string>
-    <string name="wallpaper_picker_title">Wallpaper &amp; Backdrops</string>
-    <string name="wallpaper_untinted_subtitle">Crisp untinted backdrops • Adaptive Favorite labels</string>
+    <string name="wallpaper_picker_title">Start Page Wallpaper</string>
+    <string name="wallpaper_untinted_subtitle">100% untinted wallpaper • Adaptive Favorite labels</string>
     <string name="import_wallpaper_label">Import</string>
     <string name="os_shell_section_title">Operating System Shell</string>
     <string name="default_home_os_label">Default OS Home Launcher</string>
@@ -43,10 +35,6 @@
     <string name="enable_gpu_rasterization_subtitle">Rasterize web vector paths, text &amp; offscreen scroll tiles directly on GPU</string>
     <string name="disable_hw_overlays_label">Disable Hardware Overlays</string>
     <string name="disable_hw_overlays_subtitle">Always use GPU for unified screen compositing</string>
-    <string name="disable_gpu_vsync_label">Disable GPU VSync</string>
-    <string name="disable_gpu_vsync_subtitle">Bypass GPU VSync swap stalls (--disable-gpu-vsync) for zero-lag scroll response</string>
-    <string name="disable_frame_rate_limit_label">Disable Frame Rate Limit</string>
-    <string name="disable_frame_rate_limit_subtitle">Uncap browser &amp; WebView frame pacing (--disable-frame-rate-limit)</string>
     <string name="device_optimization_badge_format">%1$s • %2$d Cores</string>
     <string name="sfx_feedback_label">Glass Sound Effects (SFX)</string>
     <string name="haptic_feedback_label">Tactile Haptic Feedback</string>
@@ -72,15 +60,48 @@
     <string name="cd_tab_groups">Manage tab groups</string>
     <string name="cd_search_tabs">Search tabs</string>
     <string name="cd_import_wallpaper">Import custom wallpaper from device</string>
-    <string name="google_account_section_title">Google Account</string>
-    <string name="google_sign_in_title">Sign in with Google</string>
-    <string name="google_sign_in_subtitle">Use Google Search, YouTube, Gmail &amp; websites with your account logged in</string>
-    <string name="google_sign_in_button">Sign In</string>
-    <string name="google_signed_in_default_name">Google Account</string>
-    <string name="google_signed_in_active_subtitle">Signed in • Active across websites</string>
-    <string name="google_manage_account_button">Account</string>
-    <string name="google_sign_out_button">Sign Out</string>
-    <string name="google_auth_sheet_title">Google Sign-In</string>
-    <string name="google_auth_done_button">Done</string>
-    <string name="cd_close_google_sign_in">Close Google Sign-In</string>
+
+    <!-- Downloads Tab & Engine -->
+    <string name="downloads_title">Downloads</string>
+    <string name="empty_downloads_hint">Files, images, and documents you download from the web appear here.</string>
+    <string name="downloads_filter_all">All</string>
+    <string name="downloads_filter_active">Active</string>
+    <string name="downloads_filter_completed">Completed</string>
+    <string name="downloads_url_placeholder">Paste direct file URL to download…</string>
+    <string name="downloads_start_button">Download</string>
+    <string name="downloads_clear_completed">Clear Done</string>
+    <string name="download_open_action">Open</string>
+    <string name="download_share_action">Share</string>
+    <string name="download_retry_action">Retry</string>
+    <string name="download_delete_action">Remove download</string>
+
+    <!-- Siri iOS 26 AI Assistant -->
+    <string name="siri_ai_title">Siri Intelligence</string>
+    <string name="siri_ai_subtitle">iOS 26 Liquid Glass • Gemini 3.8 Flash</string>
+    <string name="siri_input_placeholder">Ask Siri about this page or the web…</string>
+    <string name="siri_chip_summarize">Summarize Page</string>
+    <string name="siri_chip_visual_screen">Ask Screen Vision</string>
+    <string name="siri_chip_key_points">Key Takeaways</string>
+    <string name="siri_chip_smart_digest">Smart Digest</string>
+    <string name="siri_chip_translate">Translate</string>
+    <string name="siri_listening_hint">Listening &amp; analyzing context…</string>
+    <string name="cd_siri_orb_button">Open Siri AI Assistant</string>
+    <string name="cd_siri_voice_button">Speak to Siri</string>
+    <string name="cd_siri_send_button">Send prompt to Siri</string>
+    <string name="cd_siri_close_button">Close Siri Assistant</string>
+
+    <!-- WebView Components & Tools -->
+    <string name="web_tools_title">Web Components &amp; Controls</string>
+    <string name="web_find_in_page">Find in Page</string>
+    <string name="web_find_placeholder">Find on page…</string>
+    <string name="web_desktop_site">Desktop Site</string>
+    <string name="web_reader_mode">Reader View</string>
+    <string name="web_page_security">Connection &amp; SSL Info</string>
+    <string name="web_share_page">Share Page</string>
+    <string name="web_copy_link">Copy Link</string>
+    <string name="web_open_downloads">Downloads</string>
+    <string name="web_forward_action">Forward</string>
+    <string name="web_stop_loading">Stop</string>
+    <string name="cd_web_tools_button">Open WebView tools and controls</string>
+    <string name="cd_forward_button">Navigate forward</string>
 </resources>

@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.core.DeviceOptimizationManager
 import com.example.data.BookmarkEntity
+import com.example.data.DownloadItemEntity
 import com.example.data.FavoriteSiteEntity
 import com.example.data.HistoryEntryEntity
 import com.example.data.ReadingListItemEntity
@@ -83,6 +84,12 @@ fun BrowserHubContent(
     onDeleteReadingItem: (Long) -> Unit,
     onDeleteBookmark: (Long) -> Unit,
     onClearHistory: () -> Unit,
+    onStartDirectDownload: (String) -> Unit = {},
+    onOpenDownload: (DownloadItemEntity) -> Unit = {},
+    onShareDownload: (DownloadItemEntity) -> Unit = {},
+    onRetryDownload: (DownloadItemEntity) -> Unit = {},
+    onDeleteDownload: (DownloadItemEntity) -> Unit = {},
+    onClearCompletedDownloads: () -> Unit = {},
     onEdgeBounce: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -149,6 +156,19 @@ fun BrowserHubContent(
                 bottomContentPadding = bottomContentPadding,
                 onOpenUrl = onOpenUrl,
                 onClearHistory = onClearHistory,
+                onEdgeBounce = onEdgeBounce
+            )
+            TopHubSection.DOWNLOADS -> DownloadsSectionList(
+                downloads = uiState.downloads,
+                headerColor = onWallpaperForeground,
+                topContentPadding = topContentPadding,
+                bottomContentPadding = bottomContentPadding,
+                onStartDirectDownload = onStartDirectDownload,
+                onOpenDownload = onOpenDownload,
+                onShareDownload = onShareDownload,
+                onRetryDownload = onRetryDownload,
+                onDeleteDownload = onDeleteDownload,
+                onClearCompleted = onClearCompletedDownloads,
                 onEdgeBounce = onEdgeBounce
             )
         }

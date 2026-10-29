@@ -1,20 +1,30 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ComponentCallbacks2
+import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import android.content.ComponentCallbacks2
-import com.example.core.BrowserEngineInitializer
+import com.example.core.BrowserAiService
 import com.example.core.DeviceOptimizationManager
+import com.example.core.DownloadEngine
 import com.example.core.FeedbackManager
-import com.example.core.GoogleWebSessionManager
 import com.example.core.ResolvedWallpaper
+import com.example.core.SiriAiUiState
+import com.example.core.SiriChatTurn
 import com.example.core.WallpaperLuminanceAnalyzer
+import com.example.core.WebPageAiContext
 import com.example.data.BookmarkEntity
 import com.example.data.BrowserDatabase
 import com.example.data.BrowserPreferences
@@ -22,11 +32,12 @@ import com.example.data.BrowserRepository
 import com.example.data.BrowserSettingsState
 import com.example.data.BrowserTabEntity
 import com.example.data.CustomWallpaperEntity
+import com.example.data.DownloadItemEntity
 import com.example.data.FavoriteSiteEntity
-import com.example.data.GlassBackdropMode
 import com.example.data.HistoryEntryEntity
 import com.example.data.ReadingListItemEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -41,7 +52,8 @@ enum class TopHubSection {
     START_PAGE,
     BOOKMARKS,
     READING_LIST,
-    HISTORY
+    HISTORY,
+    DOWNLOADS
 }
 
 data class TabGroupSummary(
@@ -60,13 +72,25 @@ data class BrowserUiState(
     val history: List<HistoryEntryEntity> = emptyList(),
     val allTabs: List<BrowserTabEntity> = emptyList(),
     val customWallpapers: List<CustomWallpaperEntity> = emptyList(),
+    val downloads: List<DownloadItemEntity> = emptyList(),
     val activeSection: TopHubSection = TopHubSection.START_PAGE,
     val showAllFavorites: Boolean = false,
     val showAllReadingList: Boolean = false,
     val isTabSwitcherOpen: Boolean = false,
     val isAddressOverlayOpen: Boolean = false,
     val isSettingsSheetOpen: Boolean = false,
-    val isGoogleSignInSheetOpen: Boolean = false,
+    val isSiriOpen: Boolean = false,
+    val siriAiState: SiriAiUiState = SiriAiUiState.Idle,
+    val siriHistory: List<SiriChatTurn> = emptyList(),
+    val isWebToolsSheetOpen: Boolean = false,
+    val isFindInPageOpen: Boolean = false,
+    val findQuery: String = "",
+    val findActiveMatch: Int = 0,
+    val findTotalMatches: Int = 0,
+    val isDesktopMode: Boolean = false,
+    val isReaderMode: Boolean = false,
+    val webTextZoom: Int = 100,
+    val sslCertificateSummary: String = "",
     val activeTabGroupFilter: String? = null,
     val tabSearchQuery: String = "",
     val isTabSearchActive: Boolean = false,
@@ -94,11 +118,9 @@ data class BrowserUiState(
     val privateTabCount: Int
         get() = allTabs.count { it.isPrivate }
 
-    /**
-     * Favorites site label color strictly depends on the wallpaper luminance:
-     * - Dark wallpaper -> Light (White) label
-     * - Light wallpaper -> Dark (Black) label
-     */
+    val activeDownloadsCount: Int
+        get() = downloads.count { it.status == "RUNNING" || it.status == "PAUSED" }
+
     val isWallpaperLight: Boolean
         get() = resolvedWallpaper?.isLightWallpaper ?: false
 }
@@ -111,13 +133,22 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val deviceProfile: DeviceOptimizationManager.DeviceProfile =
         DeviceOptimizationManager.detectProfile(application)
     val feedback = FeedbackManager(application)
+    val downloadEngine = DownloadEngine(application.applicationContext, repository, viewModelScope)
+    private val aiService = BrowserAiService()
+    private var activeAiJob: Job? = null
 
-    // In-memory live webpage thumbnail & blurred backdrop snapshots keyed by tabId, bounded by device RAM tier
+    // In-memory live webpage thumbnail snapshots keyed by tabId, bounded by device RAM tier
     val tabSnapshots = mutableStateMapOf<Long, ImageBitmap>()
-    val tabBlurredSnapshots = mutableStateMapOf<Long, ImageBitmap>()
     private val snapshotLruOrder = LinkedHashSet<Long>()
 
-    // Trigger counter for WebView actions (reload / back / forward)
+    // Live downscaled & StackBlurred WebView backdrop so floating glass refracts webpages while scrolling/moving
+    var liveWebBlurredBackdrop by mutableStateOf<ImageBitmap?>(null)
+        private set
+
+    // Live webpage context & latest bitmap for Siri Intelligence & multimodal screen vision
+    private var latestPageAiContext: WebPageAiContext = WebPageAiContext()
+    private var latestLivePageBitmap: Bitmap? = null
+
     private val _webCommand = MutableStateFlow<WebCommand?>(null)
     val webCommand: StateFlow<WebCommand?> = _webCommand.asStateFlow()
 
@@ -125,7 +156,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         data object GoBack : WebCommand
         data object GoForward : WebCommand
         data object Reload : WebCommand
+        data object StopLoading : WebCommand
         data class LoadUrl(val url: String, val nonce: Long = System.nanoTime()) : WebCommand
+        data class FindInPage(val query: String, val nonce: Long = System.nanoTime()) : WebCommand
+        data class FindNext(val forward: Boolean, val nonce: Long = System.nanoTime()) : WebCommand
+        data object ClearFind : WebCommand
+        data class SetDesktopMode(val enabled: Boolean, val nonce: Long = System.nanoTime()) : WebCommand
+        data class SetReaderMode(val enabled: Boolean, val nonce: Long = System.nanoTime()) : WebCommand
+        data class SetTextZoom(val zoomPercent: Int, val nonce: Long = System.nanoTime()) : WebCommand
     }
 
     private data class TransientUiState(
@@ -135,7 +173,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val isTabSwitcherOpen: Boolean = false,
         val isAddressOverlayOpen: Boolean = false,
         val isSettingsSheetOpen: Boolean = false,
-        val isGoogleSignInSheetOpen: Boolean = false,
+        val isSiriOpen: Boolean = false,
+        val siriAiState: SiriAiUiState = SiriAiUiState.Idle,
+        val siriHistory: List<SiriChatTurn> = emptyList(),
+        val isWebToolsSheetOpen: Boolean = false,
+        val isFindInPageOpen: Boolean = false,
+        val findQuery: String = "",
+        val findActiveMatch: Int = 0,
+        val findTotalMatches: Int = 0,
+        val isDesktopMode: Boolean = false,
+        val isReaderMode: Boolean = false,
+        val webTextZoom: Int = 100,
+        val sslCertificateSummary: String = "",
         val activeTabGroupFilter: String? = null,
         val tabSearchQuery: String = "",
         val isTabSearchActive: Boolean = false,
@@ -159,6 +208,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         repository.history,
         repository.tabs,
         repository.customWallpapers,
+        repository.downloads,
         resolvedWallpaperFlow,
         transientState,
         seededFlow
@@ -177,9 +227,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val tabs = values[5] as List<BrowserTabEntity>
         @Suppress("UNCHECKED_CAST")
         val customWps = values[6] as List<CustomWallpaperEntity>
-        val resolvedWp = values[7] as ResolvedWallpaper?
-        val transient = values[8] as TransientUiState
-        val isSeeded = values[9] as Boolean
+        @Suppress("UNCHECKED_CAST")
+        val downloads = values[7] as List<DownloadItemEntity>
+        val resolvedWp = values[8] as ResolvedWallpaper?
+        val transient = values[9] as TransientUiState
+        val isSeeded = values[10] as Boolean
 
         feedback.sfxEnabled = settings.sfxEnabled
         feedback.hapticsEnabled = settings.hapticsEnabled
@@ -195,13 +247,25 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             history = history,
             allTabs = tabs,
             customWallpapers = customWps,
+            downloads = downloads,
             activeSection = transient.activeSection,
             showAllFavorites = transient.showAllFavorites,
             showAllReadingList = transient.showAllReadingList,
             isTabSwitcherOpen = transient.isTabSwitcherOpen,
             isAddressOverlayOpen = transient.isAddressOverlayOpen,
             isSettingsSheetOpen = transient.isSettingsSheetOpen,
-            isGoogleSignInSheetOpen = transient.isGoogleSignInSheetOpen,
+            isSiriOpen = transient.isSiriOpen,
+            siriAiState = transient.siriAiState,
+            siriHistory = transient.siriHistory,
+            isWebToolsSheetOpen = transient.isWebToolsSheetOpen,
+            isFindInPageOpen = transient.isFindInPageOpen,
+            findQuery = transient.findQuery,
+            findActiveMatch = transient.findActiveMatch,
+            findTotalMatches = transient.findTotalMatches,
+            isDesktopMode = transient.isDesktopMode,
+            isReaderMode = transient.isReaderMode,
+            webTextZoom = transient.webTextZoom,
+            sslCertificateSummary = transient.sslCertificateSummary,
             activeTabGroupFilter = transient.activeTabGroupFilter,
             tabSearchQuery = transient.tabSearchQuery,
             isTabSearchActive = transient.isTabSearchActive,
@@ -220,18 +284,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         viewModelScope.launch {
-            val app = getApplication<Application>()
-            withContext(Dispatchers.IO) {
-                BrowserEngineInitializer.sanitizeWebViewVariationsSeeds(app)
-            }
             repository.ensureSeeded()
             seededFlow.value = true
-            val hasCookieStore = withContext(Dispatchers.IO) {
-                GoogleWebSessionManager.hasPersistedWebViewCookieStore(app)
-            }
-            if (hasCookieStore && GoogleWebSessionManager.isGoogleSessionActive()) {
-                repository.setGoogleAccountSession(signedIn = true)
-            }
+            downloadEngine.ensureProgressPollerRunning()
         }
         viewModelScope.launch {
             combine(
@@ -266,6 +321,34 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         transientState.update { it.copy(activeSection = section) }
     }
 
+    fun openDownloadsHub() {
+        feedback.onSegmentSwitch()
+        transientState.update {
+            it.copy(
+                activeSection = TopHubSection.DOWNLOADS,
+                isWebToolsSheetOpen = false,
+                isAddressOverlayOpen = false,
+                isTabSwitcherOpen = false
+            )
+        }
+        val active = uiState.value.activeTab
+        if (active != null && active.url.isNotBlank()) {
+            viewModelScope.launch {
+                repository.updateTabNavigation(active.id, "", "Start Page")
+                transientState.update { st ->
+                    st.copy(
+                        canWebGoBack = false,
+                        canWebGoForward = false,
+                        isLoadingWebPage = false,
+                        isVideoPlaying = false,
+                        isFindInPageOpen = false,
+                        webLoadProgress = 0f
+                    )
+                }
+            }
+        }
+    }
+
     fun toggleShowAllFavorites() {
         feedback.onGlassTap()
         transientState.update { it.copy(showAllFavorites = !it.showAllFavorites) }
@@ -282,6 +365,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 isTabSwitcherOpen = true,
                 isAddressOverlayOpen = false,
+                isWebToolsSheetOpen = false,
+                isSiriOpen = false,
                 activeTabGroupFilter = null,
                 isTabSearchActive = false,
                 tabSearchQuery = ""
@@ -303,7 +388,13 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun openAddressOverlay() {
         feedback.onGlassTap()
-        transientState.update { it.copy(isAddressOverlayOpen = true) }
+        transientState.update {
+            it.copy(
+                isAddressOverlayOpen = true,
+                isWebToolsSheetOpen = false,
+                isSiriOpen = false
+            )
+        }
     }
 
     fun closeAddressOverlay() {
@@ -312,117 +403,243 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun setSettingsSheetOpen(open: Boolean) {
         feedback.onGlassTap()
-        transientState.update { it.copy(isSettingsSheetOpen = open) }
+        transientState.update {
+            it.copy(
+                isSettingsSheetOpen = open,
+                isWebToolsSheetOpen = false
+            )
+        }
     }
 
-    fun openGoogleSignInSheet() {
+    fun setWebToolsSheetOpen(open: Boolean) {
         feedback.onGlassTap()
         transientState.update {
             it.copy(
-                isGoogleSignInSheetOpen = true,
+                isWebToolsSheetOpen = open,
+                isAddressOverlayOpen = false,
+                isSiriOpen = false
+            )
+        }
+    }
+
+    // =========================================================================
+    // Siri iOS 26 AI Assistant Actions
+    // =========================================================================
+
+    fun toggleSiriOverlay() {
+        feedback.onGlassTap()
+        transientState.update {
+            val next = !it.isSiriOpen
+            it.copy(
+                isSiriOpen = next,
+                isAddressOverlayOpen = false,
+                isWebToolsSheetOpen = false,
                 isSettingsSheetOpen = false
             )
         }
     }
 
-    fun closeGoogleSignInSheet() {
-        feedback.onGlassTap()
-        GoogleWebSessionManager.flushCookies()
-        transientState.update { it.copy(isGoogleSignInSheetOpen = false) }
+    fun closeSiriOverlay() {
+        transientState.update { it.copy(isSiriOpen = false) }
     }
 
-    fun onGoogleSignInCompleted(
-        email: String = "",
-        name: String = "",
-        avatarUrl: String = ""
-    ) {
-        feedback.onSegmentSwitch()
-        GoogleWebSessionManager.flushCookies()
-        transientState.update { it.copy(isGoogleSignInSheetOpen = false) }
-        viewModelScope.launch {
-            repository.setGoogleAccountSession(
-                signedIn = true,
-                email = email,
-                name = name,
-                avatarUrl = avatarUrl
+    fun cancelSiriGeneration() {
+        activeAiJob?.cancel()
+        activeAiJob = null
+        transientState.update { it.copy(siriAiState = SiriAiUiState.Idle) }
+    }
+
+    fun clearSiriConversation() {
+        activeAiJob?.cancel()
+        activeAiJob = null
+        transientState.update {
+            it.copy(
+                siriAiState = SiriAiUiState.Idle,
+                siriHistory = emptyList()
             )
-            // Reload active standard tab if viewing a site so the page immediately reflects the signed-in Google account
-            val state = uiState.value
-            if (state.isViewingWebPage && !state.settings.isPrivateMode) {
-                _webCommand.value = WebCommand.Reload
-            }
-            val displayTarget = email.ifBlank { name.ifBlank { "Google Account" } }
-            showToast("Signed in as $displayTarget • Active on sites")
         }
     }
 
-    fun syncGoogleWebSessionFromPage(
-        isActive: Boolean,
-        email: String = "",
-        name: String = "",
-        avatarUrl: String = ""
-    ) {
-        viewModelScope.launch {
-            val current = uiState.value.settings
-            if (isActive && (!current.isGoogleSignedIn ||
-                    (email.isNotBlank() && current.googleAccountEmail != email) ||
-                    (name.isNotBlank() && current.googleAccountName != name))
-            ) {
-                repository.setGoogleAccountSession(
-                    signedIn = true,
-                    email = email,
-                    name = name,
-                    avatarUrl = avatarUrl
-                )
-            } else if (!isActive && current.isGoogleSignedIn) {
-                repository.setGoogleAccountSession(signedIn = false)
-            }
-        }
-    }
-
-    fun openGoogleAccountManagement() {
+    fun submitSiriPrompt(rawPrompt: String, includeVisualScreen: Boolean = false) {
+        val clean = rawPrompt.trim()
+        if (clean.isEmpty()) return
         feedback.onGlassTap()
-        transientState.update { it.copy(isSettingsSheetOpen = false) }
-        if (uiState.value.settings.isPrivateMode) {
-            viewModelScope.launch {
-                val standardTabs = uiState.value.allTabs.filter { !it.isPrivate }
-                val targetId = if (standardTabs.isEmpty()) {
-                    repository.createNewTab(
-                        isPrivate = false,
-                        initialUrl = GoogleWebSessionManager.GOOGLE_MANAGE_ACCOUNT_URL
+        activeAiJob?.cancel()
+
+        transientState.update { it.copy(isSiriOpen = true) }
+
+        val state = uiState.value
+        val pageCtx = if (state.isViewingWebPage) {
+            latestPageAiContext.copy(
+                url = latestPageAiContext.url.ifBlank { state.activeTab?.url.orEmpty() },
+                title = latestPageAiContext.title.ifBlank { state.activeTab?.title.orEmpty() }
+            )
+        } else {
+            null
+        }
+        val visionBmp = if (includeVisualScreen) latestLivePageBitmap else null
+        val historySnapshot = state.siriHistory
+
+        activeAiJob = viewModelScope.launch {
+            aiService.streamAssistantResponse(
+                userPrompt = clean,
+                pageContext = pageCtx,
+                screenBitmap = visionBmp,
+                recentTurns = historySnapshot
+            ).collect { emitted ->
+                transientState.update { curr ->
+                    val updatedHistory = if (emitted is SiriAiUiState.Success) {
+                        (curr.siriHistory + SiriChatTurn(
+                            userPrompt = clean,
+                            modelReply = emitted.text,
+                            usedScreenVision = includeVisualScreen
+                        )).takeLast(12)
+                    } else {
+                        curr.siriHistory
+                    }
+                    curr.copy(
+                        siriAiState = emitted,
+                        siriHistory = updatedHistory
                     )
-                } else {
-                    val first = standardTabs.first()
-                    repository.setPrivateMode(false, first.id)
-                    repository.updateTabNavigation(
-                        first.id,
-                        GoogleWebSessionManager.GOOGLE_MANAGE_ACCOUNT_URL,
-                        "Google Account"
-                    )
-                    _webCommand.value = WebCommand.LoadUrl(GoogleWebSessionManager.GOOGLE_MANAGE_ACCOUNT_URL)
-                    first.id
-                }
-                if (targetId > 0L) {
-                    transientState.update { it.copy(isTabSwitcherOpen = false) }
                 }
             }
-        } else {
-            openUrlOrSearch(GoogleWebSessionManager.GOOGLE_MANAGE_ACCOUNT_URL)
         }
     }
 
-    fun signOutGoogleAccount() {
-        feedback.onTabClosed()
-        GoogleWebSessionManager.signOutGoogleWebSession {
-            viewModelScope.launch {
-                repository.setGoogleAccountSession(signedIn = false)
-                if (uiState.value.isViewingWebPage) {
-                    _webCommand.value = WebCommand.Reload
-                }
-                showToast("Signed out of Google Account")
+    fun summarizeCurrentPage() {
+        submitSiriPrompt(
+            "Provide a clear, high-signal executive summary of this webpage with key highlights."
+        )
+    }
+
+    fun analyzeVisualScreen(prompt: String) {
+        submitSiriPrompt(rawPrompt = prompt, includeVisualScreen = true)
+    }
+
+    fun extractKeyTakeaways() {
+        submitSiriPrompt(
+            "List the 5 most important takeaways, facts, or action items from this webpage."
+        )
+    }
+
+    fun translateCurrentPageSummary() {
+        submitSiriPrompt(
+            "Translate the main content and key sections of this webpage into clear English (or Spanish if already in English)."
+        )
+    }
+
+    fun generateSmartDigest() {
+        feedback.onGlassTap()
+        activeAiJob?.cancel()
+        val state = uiState.value
+        val pageCtx = if (state.isViewingWebPage) {
+            latestPageAiContext.copy(
+                url = latestPageAiContext.url.ifBlank { state.activeTab?.url.orEmpty() },
+                title = latestPageAiContext.title.ifBlank { state.activeTab?.title.orEmpty() }
+            )
+        } else {
+            null
+        }
+        val fallbackTopic = state.activeTab?.title.orEmpty()
+
+        transientState.update {
+            it.copy(
+                isSiriOpen = true,
+                siriAiState = SiriAiUiState.Loading(activePrompt = "Smart Digest")
+            )
+        }
+
+        activeAiJob = viewModelScope.launch {
+            val result = aiService.generateStructuredDigest(pageCtx, fallbackTopic)
+            transientState.update { it.copy(siriAiState = result) }
+        }
+    }
+
+    fun updatePageAiContext(context: WebPageAiContext) {
+        latestPageAiContext = context
+    }
+
+    // =========================================================================
+    // Downloads Tab & Engine Actions
+    // =========================================================================
+
+    fun startWebOrDirectDownload(
+        url: String,
+        userAgent: String? = null,
+        contentDisposition: String? = null,
+        mimeType: String? = null,
+        contentLength: Long = -1L
+    ) {
+        val normalized = if (url.startsWith("http://", true) ||
+            url.startsWith("https://", true) ||
+            url.startsWith("data:", true)
+        ) {
+            url.trim()
+        } else {
+            "https://${url.trim()}"
+        }
+        feedback.onGlassTap()
+        downloadEngine.enqueueWebDownload(
+            url = normalized,
+            userAgent = userAgent,
+            contentDisposition = contentDisposition,
+            mimeType = mimeType,
+            contentLength = contentLength,
+            onStatusToast = ::showToast
+        )
+    }
+
+    fun saveBlobBase64Download(dataUrl: String, fileName: String?, mimeType: String?) {
+        viewModelScope.launch {
+            val saved = downloadEngine.saveBase64BlobDownload(dataUrl, fileName, mimeType)
+            if (saved != null) {
+                showToast("Downloaded $saved")
+            } else {
+                showToast("Unable to save blob download")
             }
         }
     }
+
+    fun openDownloadItem(context: Context, item: DownloadItemEntity) {
+        feedback.onGlassTap()
+        if (!downloadEngine.openDownload(context, item)) {
+            showToast("No installed viewer found for ${item.fileName}")
+        }
+    }
+
+    fun shareDownloadItem(context: Context, item: DownloadItemEntity) {
+        feedback.onGlassTap()
+        if (!downloadEngine.shareDownload(context, item)) {
+            showToast("Unable to share ${item.fileName}")
+        }
+    }
+
+    fun retryDownloadItem(item: DownloadItemEntity) {
+        feedback.onGlassTap()
+        viewModelScope.launch {
+            downloadEngine.removeDownload(item)
+            startWebOrDirectDownload(url = item.url, mimeType = item.mimeType)
+        }
+    }
+
+    fun deleteDownloadItem(item: DownloadItemEntity) {
+        feedback.onTabClosed()
+        viewModelScope.launch {
+            downloadEngine.removeDownload(item)
+        }
+    }
+
+    fun clearCompletedDownloads() {
+        feedback.onTabClosed()
+        viewModelScope.launch {
+            repository.clearCompletedDownloads()
+            showToast("Cleared completed downloads")
+        }
+    }
+
+    // =========================================================================
+    // Enhanced WebView Components & Navigation Actions
+    // =========================================================================
 
     fun openUrlOrSearch(rawInput: String) {
         val normalized = BrowserRepository.normalizeUrlOrSearch(rawInput)
@@ -432,7 +649,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 isAddressOverlayOpen = false,
                 isTabSwitcherOpen = false,
-                isVideoPlaying = false
+                isWebToolsSheetOpen = false,
+                isVideoPlaying = false,
+                isReaderMode = false
             )
         }
         viewModelScope.launch {
@@ -449,8 +668,131 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun openUrlInNewTab(rawUrl: String) {
+        val normalized = BrowserRepository.normalizeUrlOrSearch(rawUrl)
+        if (normalized.isBlank()) return
+        feedback.onTabZoom(opening = false)
+        viewModelScope.launch {
+            repository.createNewTab(
+                isPrivate = uiState.value.settings.isPrivateMode,
+                initialUrl = normalized
+            )
+            showToast("Opened in new tab")
+        }
+    }
+
+    fun goForwardWebPage() {
+        feedback.onGlassTap()
+        _webCommand.value = WebCommand.GoForward
+    }
+
+    fun stopOrReloadWebPage() {
+        feedback.onGlassTap()
+        if (uiState.value.isLoadingWebPage) {
+            _webCommand.value = WebCommand.StopLoading
+            transientState.update { it.copy(isLoadingWebPage = false, webLoadProgress = 0f) }
+        } else {
+            _webCommand.value = WebCommand.Reload
+        }
+    }
+
+    fun openFindInPage() {
+        feedback.onGlassTap()
+        transientState.update {
+            it.copy(
+                isFindInPageOpen = true,
+                isWebToolsSheetOpen = false,
+                findActiveMatch = 0,
+                findTotalMatches = 0
+            )
+        }
+    }
+
+    fun closeFindInPage() {
+        transientState.update {
+            it.copy(
+                isFindInPageOpen = false,
+                findQuery = "",
+                findActiveMatch = 0,
+                findTotalMatches = 0
+            )
+        }
+        _webCommand.value = WebCommand.ClearFind
+    }
+
+    fun updateFindQuery(query: String) {
+        transientState.update { it.copy(findQuery = query) }
+        _webCommand.value = WebCommand.FindInPage(query)
+    }
+
+    fun findNextMatch(forward: Boolean) {
+        feedback.onGlassTap()
+        _webCommand.value = WebCommand.FindNext(forward)
+    }
+
+    fun onFindResultsUpdated(activeOrdinal: Int, numberOfMatches: Int) {
+        transientState.update {
+            it.copy(
+                findActiveMatch = activeOrdinal,
+                findTotalMatches = numberOfMatches
+            )
+        }
+    }
+
+    fun toggleDesktopMode(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        transientState.update { it.copy(isDesktopMode = enabled) }
+        _webCommand.value = WebCommand.SetDesktopMode(enabled)
+        showToast(if (enabled) "Desktop Site enabled" else "Mobile Site active")
+    }
+
+    fun toggleReaderMode(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        transientState.update { it.copy(isReaderMode = enabled) }
+        _webCommand.value = WebCommand.SetReaderMode(enabled)
+        showToast(if (enabled) "Reader View enabled" else "Standard Web View restored")
+    }
+
+    fun updateWebTextZoom(percent: Int) {
+        val clamped = percent.coerceIn(70, 190)
+        feedback.onGlassTap()
+        transientState.update { it.copy(webTextZoom = clamped) }
+        _webCommand.value = WebCommand.SetTextZoom(clamped)
+    }
+
+    fun updateSslCertificateSummary(summary: String) {
+        transientState.update { it.copy(sslCertificateSummary = summary) }
+    }
+
+    fun copyUrlToClipboard(context: Context, url: String) {
+        if (url.isBlank()) return
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        cm?.setPrimaryClip(ClipData.newPlainText("URL", url))
+        showToast("Copied link to clipboard")
+    }
+
+    fun sharePageUrl(context: Context, title: String, url: String) {
+        if (url.isBlank()) return
+        try {
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, title)
+                putExtra(Intent.EXTRA_TEXT, url)
+            }
+            context.startActivity(
+                Intent.createChooser(send, title.ifBlank { "Share Link" })
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Throwable) {
+            showToast("Unable to open share sheet")
+        }
+    }
+
     fun returnToStartPage() {
         feedback.onGlassTap()
+        liveWebBlurredBackdrop = null
+        latestLivePageBitmap = null
+        latestPageAiContext = WebPageAiContext()
         viewModelScope.launch {
             val current = uiState.value.activeTab ?: return@launch
             repository.updateTabNavigation(current.id, "", "Start Page")
@@ -460,22 +802,24 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     canWebGoForward = false,
                     isLoadingWebPage = false,
                     isVideoPlaying = false,
+                    isFindInPageOpen = false,
+                    isWebToolsSheetOpen = false,
+                    isReaderMode = false,
                     webLoadProgress = 0f
                 )
             }
         }
     }
 
-    /**
-     * Invoked when the phone's physical/gesture Home action dispatches CATEGORY_HOME to our OS shell.
-     */
     fun onSystemHomeAction() {
         transientState.update {
             it.copy(
                 isTabSwitcherOpen = false,
                 isAddressOverlayOpen = false,
                 isSettingsSheetOpen = false,
-                isGoogleSignInSheetOpen = false,
+                isWebToolsSheetOpen = false,
+                isSiriOpen = false,
+                isFindInPageOpen = false,
                 isVideoPlaying = false,
                 activeSection = TopHubSection.START_PAGE
             )
@@ -490,7 +834,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         feedback.onGlassTap()
         val state = uiState.value
         when {
-            state.isGoogleSignInSheetOpen -> closeGoogleSignInSheet()
+            state.isSiriOpen -> closeSiriOverlay()
+            state.isWebToolsSheetOpen -> setWebToolsSheetOpen(false)
+            state.isFindInPageOpen -> closeFindInPage()
             state.isAddressOverlayOpen -> closeAddressOverlay()
             state.isSettingsSheetOpen -> setSettingsSheetOpen(false)
             state.isTabSwitcherOpen -> {
@@ -527,6 +873,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 isLoadingWebPage = true,
                 isVideoPlaying = false,
+                isReaderMode = false,
                 webLoadProgress = 0.12f
             )
         }
@@ -580,9 +927,24 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateTabSnapshot(tabId: Long, bitmap: Bitmap) {
+        latestLivePageBitmap = bitmap
         snapshotLruOrder.remove(tabId)
         snapshotLruOrder.add(tabId)
         tabSnapshots[tabId] = bitmap.asImageBitmap()
+
+        // Also compute a silky downscaled blurred backdrop asynchronously for live frosted glass over webpages
+        viewModelScope.launch {
+            val blurred = withContext(Dispatchers.Default) {
+                WallpaperLuminanceAnalyzer.blurBitmapForBackdrop(
+                    source = bitmap,
+                    downscale = 3,
+                    radius = deviceProfile.fallbackStackBlurRadius
+                )
+            }
+            if (blurred != null && uiState.value.activeTab?.id == tabId) {
+                liveWebBlurredBackdrop = blurred
+            }
+        }
 
         val maxCached = deviceProfile.maxCachedTabSnapshots.coerceAtLeast(2)
         val activeId = uiState.value.activeTab?.id
@@ -591,24 +953,25 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 ?: break
             snapshotLruOrder.remove(evictCandidate)
             tabSnapshots.remove(evictCandidate)
-            tabBlurredSnapshots.remove(evictCandidate)
         }
+    }
 
-        // Compute silky StackBlurred backdrop bitmap off the main thread for zero-jank glassmorphism
+    fun updateLiveWebBackdropOnly(bitmap: Bitmap) {
+        latestLivePageBitmap = bitmap
         viewModelScope.launch {
             val blurred = withContext(Dispatchers.Default) {
-                WallpaperLuminanceAnalyzer.blurSnapshotBitmap(bitmap, deviceProfile)
+                WallpaperLuminanceAnalyzer.blurBitmapForBackdrop(
+                    source = bitmap,
+                    downscale = 3,
+                    radius = deviceProfile.fallbackStackBlurRadius
+                )
             }
-            if (blurred != null && tabSnapshots.containsKey(tabId)) {
-                tabBlurredSnapshots[tabId] = blurred
+            if (blurred != null) {
+                liveWebBlurredBackdrop = blurred
             }
         }
     }
 
-    /**
-     * Releases background tab thumbnail bitmaps when Android signals low-memory conditions
-     * so low-RAM devices stay responsive without dropping the active session.
-     */
     fun trimMemory(level: Int) {
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
             level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
@@ -617,7 +980,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             val toRemove = tabSnapshots.keys.filter { it != activeId }
             toRemove.forEach { id ->
                 tabSnapshots.remove(id)
-                tabBlurredSnapshots.remove(id)
                 snapshotLruOrder.remove(id)
             }
         }
@@ -625,6 +987,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun createNewTab(groupName: String? = null) {
         feedback.onTabZoom(opening = false)
+        liveWebBlurredBackdrop = null
         viewModelScope.launch {
             val isPrivate = uiState.value.settings.isPrivateMode
             repository.createNewTab(isPrivate = isPrivate, initialUrl = "", groupName = groupName)
@@ -632,6 +995,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 it.copy(
                     isTabSwitcherOpen = false,
                     isVideoPlaying = false,
+                    isFindInPageOpen = false,
                     activeTabGroupFilter = null,
                     activeSection = TopHubSection.START_PAGE
                 )
@@ -647,6 +1011,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 it.copy(
                     isTabSwitcherOpen = false,
                     isVideoPlaying = false,
+                    isFindInPageOpen = false,
                     activeTabGroupFilter = null
                 )
             }
@@ -659,7 +1024,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             val state = uiState.value
             val remaining = state.allTabs.filter { it.id != tab.id && it.isPrivate == tab.isPrivate }
             tabSnapshots.remove(tab.id)
-            tabBlurredSnapshots.remove(tab.id)
             snapshotLruOrder.remove(tab.id)
             repository.closeTab(tab.id)
             if (remaining.isEmpty()) {
@@ -732,38 +1096,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun setDarkMode(dark: Boolean) {
         feedback.onSegmentSwitch()
-        viewModelScope.launch {
-            repository.setDarkMode(dark)
-        }
-    }
-
-    fun setFrostedGlassEnabled(enabled: Boolean) {
-        feedback.onSegmentSwitch()
-        viewModelScope.launch {
-            repository.setFrostedGlassEnabled(enabled)
-            showToast(if (enabled) "Frosted Glass enabled" else "Frosted Glass off")
-        }
-    }
-
-    fun setGlassBackdropMode(mode: GlassBackdropMode) {
-        feedback.onSegmentSwitch()
-        viewModelScope.launch {
-            repository.setGlassBackdropMode(mode)
-            val label = when (mode) {
-                GlassBackdropMode.PRISM_AURA -> "Prism Aura"
-                GlassBackdropMode.LIVE_SCENE -> "Live Optical"
-                GlassBackdropMode.STUDIO_HALO -> "Studio Halo"
-                GlassBackdropMode.DEEP_FROST -> "Deep Frost"
-            }
-            showToast("Glass backdrop: $label")
-        }
+        viewModelScope.launch { repository.setDarkMode(dark) }
     }
 
     fun selectWallpaper(wallpaperId: String) {
         feedback.onGlassTap()
-        viewModelScope.launch {
-            repository.setSelectedWallpaper(wallpaperId)
-        }
+        viewModelScope.launch { repository.setSelectedWallpaper(wallpaperId) }
     }
 
     fun importCustomWallpaper(uri: Uri) {
@@ -806,36 +1144,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun setHighRefreshRateEnabled(enabled: Boolean) {
         feedback.onSegmentSwitch()
         viewModelScope.launch { repository.setHighRefreshRateEnabled(enabled) }
-    }
-
-    fun setDisableGpuVsync(enabled: Boolean) {
-        feedback.onSegmentSwitch()
-        viewModelScope.launch {
-            repository.setDisableGpuVsync(enabled)
-            val s = uiState.value.settings
-            BrowserEngineInitializer.initialize(
-                context = getApplication(),
-                disableGpuVsync = enabled,
-                disableFrameRateLimit = s.disableFrameRateLimit,
-                enableGpuRasterization = s.enableGpuRasterization
-            )
-            showToast(if (enabled) "GPU VSync disabled (--disable-gpu-vsync)" else "GPU VSync standard")
-        }
-    }
-
-    fun setDisableFrameRateLimit(enabled: Boolean) {
-        feedback.onSegmentSwitch()
-        viewModelScope.launch {
-            repository.setDisableFrameRateLimit(enabled)
-            val s = uiState.value.settings
-            BrowserEngineInitializer.initialize(
-                context = getApplication(),
-                disableGpuVsync = s.disableGpuVsync,
-                disableFrameRateLimit = enabled,
-                enableGpuRasterization = s.enableGpuRasterization
-            )
-            showToast(if (enabled) "Frame rate limit disabled (uncapped)" else "Frame rate limit standard")
-        }
     }
 
     fun setForceGpuRendering(enabled: Boolean) {
@@ -900,24 +1208,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun addQuickReadingListItem(title: String, url: String) {
-        if (url.isBlank()) return
-        feedback.onGlassTap()
-        viewModelScope.launch {
-            repository.addReadingListItem(title, url)
-            showToast("Added to Reading List")
-        }
-    }
-
-    fun addQuickBookmark(title: String, url: String) {
-        if (url.isBlank()) return
-        feedback.onGlassTap()
-        viewModelScope.launch {
-            repository.addBookmark(title, url)
-            showToast("Bookmark saved")
-        }
-    }
-
     fun removeFavorite(id: Long) {
         feedback.onTabClosed()
         viewModelScope.launch { repository.removeFavorite(id) }
@@ -941,7 +1231,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun showToast(message: String) {
+    fun showToast(message: String) {
         viewModelScope.launch {
             transientState.update { it.copy(statusToast = message) }
             kotlinx.coroutines.delay(2200L)

@@ -12,12 +12,17 @@ import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -35,7 +40,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawOutline
@@ -60,7 +64,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
-import com.example.data.GlassBackdropMode
 import com.example.ui.theme.LocalGlassStyle
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -68,28 +71,49 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
+ * Draw-phase-only motion tracker that invalidates `FrostedGlassBox` `drawBehind` blocks
+ * on every scroll pixel, rubber-band bounce frame, WebView scroll delta, or floating-glass drag
+ * with ZERO Compose recomposition overhead.
+ */
+@Stable
+class GlassMotionTracker {
+    var tick by mutableIntStateOf(0)
+        private set
+
+    var webScrollDeltaY by mutableFloatStateOf(0f)
+        private set
+
+    fun notifyMoved() {
+        tick = (tick + 1) and 0x3FFFFFFF
+    }
+
+    fun updateWebScrollDelta(deltaY: Float) {
+        webScrollDeltaY = deltaY
+        notifyMoved()
+    }
+}
+
+/**
  * Shared live backdrop state enabling zero-recursion spatial frosted glass across Start Page,
- * live WebView browsing, floating chrome bars, and modal sheets:
- * - [wallpaperBlurredLayer]: Hardware-blurred GraphicsLayer for inner cards (untinted wallpaper on Start Page; settled webpage backdrop on sites)
- * - [sceneBlurredLayer]: Hardware-blurred GraphicsLayer of the full scene (wallpaper + Hub content on Start Page; settled webpage backdrop on sites)
- * - [fallbackBlurredBitmap]: StackBlurred ImageBitmap for scene backdrop on API < 31 / JVM tests
- * - [fallbackCardBlurredBitmap]: StackBlurred ImageBitmap for card backdrop on API < 31 / JVM tests
- * - [backdropMode]: Active glassmorphism optical backdrop mode
+ * scrolling Hub lists, live WebView pages, floating chrome bars, and movable Siri / tool pills:
+ * - [wallpaperBlurredLayer]: Hardware-blurred GraphicsLayer of the untinted Start Page wallpaper
+ * - [sceneBlurredLayer]: Hardware-blurred GraphicsLayer of the live scene (wallpaper + Hub content)
+ * - [fallbackBlurredBitmap]: StackBlurred ImageBitmap for Start Page or live WebView backdrop
+ * - [motionTracker]: Draw-phase invalidator so frosted glass follows content underneath when scrolling or moving
  */
 @Immutable
 data class SpatialBackdropState(
     val wallpaperBlurredLayer: GraphicsLayer? = null,
     val sceneBlurredLayer: GraphicsLayer? = null,
     val fallbackBlurredBitmap: ImageBitmap? = null,
-    val fallbackCardBlurredBitmap: ImageBitmap? = null,
-    val backdropMode: GlassBackdropMode = GlassBackdropMode.PRISM_AURA,
-    val rootSize: IntSize = IntSize.Zero
+    val isWebBackdrop: Boolean = false,
+    val rootSize: IntSize = IntSize.Zero,
+    val motionTracker: GlassMotionTracker = GlassMotionTracker()
 ) {
     val hasActiveBackdrop: Boolean
         get() = wallpaperBlurredLayer != null ||
             sceneBlurredLayer != null ||
-            fallbackBlurredBitmap != null ||
-            fallbackCardBlurredBitmap != null
+            fallbackBlurredBitmap != null
 }
 
 val LocalSpatialBackdrop = staticCompositionLocalOf { SpatialBackdropState() }
@@ -110,18 +134,16 @@ private class GlassGeometryCache {
     var cachedOutline: Outline? = null
     val clipPath: Path = Path()
     var sheenBrush: Brush? = null
-    var counterSheenBrush: Brush? = null
     var rimBrush: Brush? = null
-    val lightFieldCache: SpatialLightFieldCache = SpatialLightFieldCache()
 }
 
 /**
- * Renders an authentic frosted-glass container that dynamically samples & blurs the content
- * directly behind its screen coordinates, layered with strict monochrome White (Light Mode) or
- * Black (Dark Mode) translucency and a dual specular rim highlight.
+ * Renders an authentic frosted-glass container that dynamically tracks, samples, and refracts
+ * the live content directly beneath its current screen coordinates when scrolling or moving,
+ * layered with crisp translucency and a specular rim highlight.
  *
- * Uses zero-allocation cached geometry & non-state LayoutCoordinates references so scrolling never
- * triggers Compose recompositions and stays locked at native display refresh up to 360Hz.
+ * Reads [GlassMotionTracker.tick] strictly inside `drawBehind` so scrolling and dragging never
+ * trigger Compose recompositions while maintaining 60–360Hz spatial tracking.
  */
 @Composable
 fun FrostedGlassBox(
@@ -147,15 +169,22 @@ fun FrostedGlassBox(
     Box(
         contentAlignment = contentAlignment,
         modifier = modifier
-            .then(
-                if (style.isFrostedGlassEnabled) {
-                    Modifier.onGloballyPositioned { coordsRef.value = it }
-                } else {
-                    Modifier
-                }
-            )
+            .onGloballyPositioned {
+                coordsRef.value = it
+                backdrop.motionTracker.notifyMoved()
+            }
             .clip(shape)
             .drawBehind {
+                // Observe draw-phase motion state so scrolling lists, WebView scrolling, and
+                // dragging glass elements dynamically re-sample their exact root coordinates!
+                val motionTick = backdrop.motionTracker.tick
+                val webScrollShiftY = if (backdrop.isWebBackdrop) {
+                    backdrop.motionTracker.webScrollDeltaY
+                } else {
+                    0f
+                }
+                if (motionTick < 0) return@drawBehind // keeps read live without branching overhead
+
                 if (size.width <= 0f || size.height <= 0f) return@drawBehind
                 if (geometryCache.cachedSize != size ||
                     geometryCache.cachedLayoutDirection != layoutDirection ||
@@ -176,14 +205,6 @@ fun FrostedGlassBox(
                         startY = 0f,
                         endY = (size.height * 0.58f).coerceAtLeast(1f)
                     )
-                    geometryCache.counterSheenBrush = Brush.linearGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            style.topSheen.copy(alpha = style.topSheen.alpha * 0.42f)
-                        ),
-                        start = Offset(size.width * 0.35f, size.height * 0.55f),
-                        end = Offset(size.width.coerceAtLeast(1f), size.height.coerceAtLeast(1f))
-                    )
                     geometryCache.rimBrush = Brush.linearGradient(
                         colors = listOf(style.rimTopLeft, style.rimBottomRight),
                         start = Offset.Zero,
@@ -192,37 +213,18 @@ fun FrostedGlassBox(
                 }
 
                 val outline = geometryCache.cachedOutline ?: return@drawBehind
-
-                if (!style.isFrostedGlassEnabled) {
-                    // Frosted Glass OFF: Crisp 100% opaque monochrome surface + hairline border
-                    val solidFill = when (elevation) {
-                        GlassElevation.CARD -> style.solidCardSurface
-                        GlassElevation.FLOATING_BAR -> style.solidBarSurface
-                        GlassElevation.MODAL_OVERLAY -> style.solidOverlaySurface
-                    }
-                    clipPath(geometryCache.clipPath) {
-                        drawRect(color = solidFill)
-                    }
-                    if (shape != RectangleShape) {
-                        val strokeWidthPx = 1.dp.toPx()
-                        drawOutline(
-                            outline = outline,
-                            color = style.solidBorderColor,
-                            style = Stroke(width = strokeWidthPx)
-                        )
-                    }
-                    return@drawBehind
-                }
-
                 val coords = coordsRef.value
                 val posInRoot = if (coords != null && coords.isAttached) {
-                    coords.positionInRoot()
+                    try {
+                        coords.positionInRoot()
+                    } catch (_: Throwable) {
+                        Offset.Zero
+                    }
                 } else {
                     Offset.Zero
                 }
 
                 val sheen = geometryCache.sheenBrush
-                val counterSheen = geometryCache.counterSheenBrush
                 val rim = geometryCache.rimBrush
 
                 clipPath(geometryCache.clipPath) {
@@ -231,11 +233,7 @@ fun FrostedGlassBox(
                     } else {
                         backdrop.wallpaperBlurredLayer ?: backdrop.sceneBlurredLayer
                     }
-                    val activeFallbackBmp = if (useLiveSceneBackdrop) {
-                        backdrop.fallbackBlurredBitmap ?: backdrop.fallbackCardBlurredBitmap
-                    } else {
-                        backdrop.fallbackCardBlurredBitmap ?: backdrop.fallbackBlurredBitmap
-                    }
+                    val activeFallbackBmp = backdrop.fallbackBlurredBitmap
 
                     var hasSampledBackdrop = false
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
@@ -255,46 +253,45 @@ fun FrostedGlassBox(
                         val bmp = activeFallbackBmp
                         val rootW = backdrop.rootSize.width
                         val rootH = backdrop.rootSize.height
-                        // Center-crop scale calculation matching viewport display
                         val scale = maxOf(
                             rootW.toFloat() / bmp.width.coerceAtLeast(1),
                             rootH.toFloat() / bmp.height.coerceAtLeast(1)
                         )
-                        val dstW = (bmp.width * scale).roundToInt()
-                        val dstH = (bmp.height * scale).roundToInt()
+                        val dstW = (bmp.width * scale).roundToInt().coerceAtLeast(1)
+                        val dstH = (bmp.height * scale).roundToInt().coerceAtLeast(1)
                         val offsetX = ((rootW - dstW) / 2f) - posInRoot.x
-                        val offsetY = ((rootH - dstH) / 2f) - posInRoot.y
+                        // Apply live WebView scroll delta (wrapped smoothly if scrolling fast before next snapshot)
+                        val wrappedShiftY = if (backdrop.isWebBackdrop && dstH > 0) {
+                            (webScrollShiftY % dstH)
+                        } else {
+                            0f
+                        }
+                        val offsetY = ((rootH - dstH) / 2f) - posInRoot.y - wrappedShiftY
                         drawImage(
                             image = bmp,
                             dstOffset = IntOffset(offsetX.roundToInt(), offsetY.roundToInt()),
                             dstSize = IntSize(dstW, dstH)
                         )
+                        // Seamless vertical tile fill when rapid WebView scrolling shifts past top/bottom edge
+                        if (backdrop.isWebBackdrop && abs(wrappedShiftY) > 1f) {
+                            val neighborY = if (wrappedShiftY > 0f) offsetY + dstH else offsetY - dstH
+                            drawImage(
+                                image = bmp,
+                                dstOffset = IntOffset(offsetX.roundToInt(), neighborY.roundToInt()),
+                                dstSize = IntSize(dstW, dstH)
+                            )
+                        }
                     }
 
-                    // Spatial glassmorphism light-field backdrop anchored in viewport coordinates
-                    geometryCache.lightFieldCache.drawInScreenSpace(
-                        scope = this,
-                        posInRoot = posInRoot,
-                        rootSize = backdrop.rootSize,
-                        mode = backdrop.backdropMode,
-                        isDark = style.isDark,
-                        hasSampledBackdrop = hasSampledBackdrop
-                    )
-
-                    // Monochrome Frosted Glass Tint (Black in Dark Mode, White in Light Mode)
                     val effectiveTintAlpha = if (hasSampledBackdrop) {
                         tintAlpha
                     } else {
-                        (tintAlpha + 0.08f).coerceAtMost(0.88f)
+                        (tintAlpha + 0.14f).coerceAtMost(0.88f)
                     }
                     drawRect(color = style.glassBaseColor.copy(alpha = effectiveTintAlpha))
 
-                    // Dual optical refraction sheen (top specular + subtle bottom-right internal reflection)
                     if (sheen != null) {
                         drawRect(brush = sheen)
-                    }
-                    if (counterSheen != null) {
-                        drawRect(brush = counterSheen)
                     }
                 }
 
@@ -326,12 +323,51 @@ fun configureBlurLayer(layer: GraphicsLayer, blurRadiusPx: Float) {
 }
 
 /**
- * Clears hardware RenderEffect blur from a GraphicsLayer when Frosted Glass is disabled.
+ * Makes any floating frosted-glass pill, orb, or card freely movable across the screen with
+ * tactile inertia and live backdrop refraction tracking as it moves.
  */
-fun clearBlurLayer(layer: GraphicsLayer) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        layer.renderEffect = null
-    }
+fun Modifier.draggableGlassSurface(
+    enabled: Boolean = true,
+    maxHorizontalOffsetPx: Float = 900f,
+    maxVerticalOffsetPx: Float = 1400f
+): Modifier = composed {
+    if (!enabled) return@composed this
+    val backdrop = LocalSpatialBackdrop.current
+    val scope = rememberCoroutineScope()
+    val offsetX = remember { Animatable(0f) }
+    val offsetY = remember { Animatable(0f) }
+
+    this
+        .offset {
+            IntOffset(offsetX.value.roundToInt(), offsetY.value.roundToInt())
+        }
+        .pointerInput(maxHorizontalOffsetPx, maxVerticalOffsetPx) {
+            detectDragGestures(
+                onDrag = { change, dragAmount ->
+                    change.consume()
+                    val nextX = (offsetX.value + dragAmount.x)
+                        .coerceIn(-maxHorizontalOffsetPx, maxHorizontalOffsetPx)
+                    val nextY = (offsetY.value + dragAmount.y)
+                        .coerceIn(-maxVerticalOffsetPx, maxVerticalOffsetPx)
+                    scope.launch {
+                        offsetX.snapTo(nextX)
+                        offsetY.snapTo(nextY)
+                        backdrop.motionTracker.notifyMoved()
+                    }
+                },
+                onDragEnd = {
+                    // Subtle spring settle for physical glass feel
+                    scope.launch {
+                        offsetX.animateTo(
+                            targetValue = offsetX.value,
+                            animationSpec = spring(dampingRatio = 0.72f, stiffness = 420f)
+                        ) {
+                            backdrop.motionTracker.notifyMoved()
+                        }
+                    }
+                }
+            )
+        }
 }
 
 /**
@@ -362,7 +398,6 @@ fun rememberPhysicalMomentumFlingBehavior(): FlingBehavior {
                     val consumed = scrollBy(delta)
                     lastValue = value
                     velocityLeft = this.velocity
-                    // Hit scroll edge: hand remaining momentum directly to Rubber-Band spring!
                     if (abs(delta - consumed) > 0.5f) {
                         this.cancelAnimation()
                     }
@@ -374,23 +409,23 @@ fun rememberPhysicalMomentumFlingBehavior(): FlingBehavior {
 }
 
 /**
- * Rubber-Banding (Bouncing) Overscroll Modifier:
- * - Finger drag past top or bottom edge applies progressive elastic resistance.
- * - Momentum fling hitting top or bottom edge overshoots proportionally and springs back smoothly.
+ * Rubber-Banding (Bouncing) Overscroll + Live Frosted-Glass Scroll Tracking Modifier:
+ * - Notifies [GlassMotionTracker] on every consumed scroll delta and elastic bounce frame so
+ *   both scrolling glass cards and stationary floating bars continuously refract the live content beneath.
  */
 fun Modifier.rubberBandOverscroll(
     maxOverscrollPx: Float = 380f,
     onEdgeHit: ((velocityPxPerSec: Float) -> Unit)? = null
 ): Modifier = composed {
     val scope = rememberCoroutineScope()
+    val backdrop = LocalSpatialBackdrop.current
     val overscrollY = remember { Animatable(0f) }
 
-    val connection = remember(maxOverscrollPx, onEdgeHit) {
+    val connection = remember(maxOverscrollPx, onEdgeHit, backdrop.motionTracker) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 val current = overscrollY.value
                 if (source == NestedScrollSource.UserInput && abs(current) > 0.5f) {
-                    // Unwind active rubber-band stretch first when reversing finger direction
                     val sameSign = (current > 0f && available.y > 0f) || (current < 0f && available.y < 0f)
                     if (!sameSign) {
                         val next = if (current > 0f) {
@@ -399,7 +434,10 @@ fun Modifier.rubberBandOverscroll(
                             (current + available.y).coerceAtMost(0f)
                         }
                         val consumedY = next - current
-                        scope.launch { overscrollY.snapTo(next) }
+                        scope.launch {
+                            overscrollY.snapTo(next)
+                            backdrop.motionTracker.notifyMoved()
+                        }
                         return Offset(0f, consumedY)
                     }
                 }
@@ -411,13 +449,19 @@ fun Modifier.rubberBandOverscroll(
                 available: Offset,
                 source: NestedScrollSource
             ): Offset {
+                if (consumed.x != 0f || consumed.y != 0f) {
+                    backdrop.motionTracker.notifyMoved()
+                }
                 if (source == NestedScrollSource.UserInput && abs(available.y) > 0.05f) {
                     val current = overscrollY.value
                     val normalized = (abs(current) / maxOverscrollPx).coerceIn(0f, 2f)
                     val resistance = 0.55f / (1f + normalized).pow(1.35f)
                     val dampedDelta = available.y * resistance
                     val target = (current + dampedDelta).coerceIn(-maxOverscrollPx, maxOverscrollPx)
-                    scope.launch { overscrollY.snapTo(target) }
+                    scope.launch {
+                        overscrollY.snapTo(target)
+                        backdrop.motionTracker.notifyMoved()
+                    }
                     return Offset(0f, available.y)
                 }
                 return Offset.Zero
@@ -433,7 +477,9 @@ fun Modifier.rubberBandOverscroll(
                                 stiffness = 310f
                             ),
                             initialVelocity = available.y * 0.25f
-                        )
+                        ) {
+                            backdrop.motionTracker.notifyMoved()
+                        }
                     }
                     return available
                 }
@@ -441,6 +487,7 @@ fun Modifier.rubberBandOverscroll(
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                backdrop.motionTracker.notifyMoved()
                 if (abs(available.y) > 90f || abs(overscrollY.value) > 0.5f) {
                     if (abs(available.y) > 260f) {
                         onEdgeHit?.invoke(available.y)
@@ -454,7 +501,9 @@ fun Modifier.rubberBandOverscroll(
                                 stiffness = 275f
                             ),
                             initialVelocity = clampedVelocity
-                        )
+                        ) {
+                            backdrop.motionTracker.notifyMoved()
+                        }
                     }
                     return available
                 }
