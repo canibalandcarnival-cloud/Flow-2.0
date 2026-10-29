@@ -23,7 +23,8 @@ class WebBrowserJsBridge(
     private val mainHandler: Handler,
     private val onPlaybackStateChanged: (Boolean) -> Unit,
     private val onBlobBase64Received: (dataUrl: String, fileName: String?, mimeType: String?) -> Unit,
-    private val onPageAiContextReceived: (WebPageAiContext) -> Unit
+    private val onPageAiContextReceived: (WebPageAiContext) -> Unit,
+    private val onSiteNavigationReceived: (String) -> Unit = {}
 ) {
     @Keep
     @JavascriptInterface
@@ -54,6 +55,16 @@ class WebBrowserJsBridge(
         )
         mainHandler.post {
             onPageAiContextReceived(context)
+        }
+    }
+
+    @Keep
+    @JavascriptInterface
+    fun onSiteNavigation(payloadJson: String?) {
+        val safeJson = payloadJson?.trim().orEmpty()
+        if (safeJson.isEmpty()) return
+        mainHandler.post {
+            onSiteNavigationReceived(safeJson)
         }
     }
 }
@@ -117,6 +128,10 @@ object WebViewBridgeScripts {
                                 var targetPad = playing ? '0px' : '88px';
                                 if (document.body.style.paddingBottom !== targetPad) {
                                     document.body.style.paddingBottom = targetPad;
+                                }
+                                if (window.__glassReplaceSiteNav) {
+                                    var targetTopPad = playing ? '0px' : '68px';
+                                    document.body.style.setProperty('padding-top', targetTopPad, 'important');
                                 }
                             }
                             if (playing !== lastReported) {

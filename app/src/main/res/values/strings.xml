@@ -104,4 +104,27 @@
     <string name="web_stop_loading">Stop</string>
     <string name="cd_web_tools_button">Open WebView tools and controls</string>
     <string name="cd_forward_button">Navigate forward</string>
+
+    <!-- Custom Per-Site Frosted Navigation Bar -->
+    <string name="site_nav_replace_title">Custom Site Navigation Bar</string>
+    <string name="site_nav_replace_subtitle">Adapt each site with its own custom bottom bar &amp; dock beneath YouTube</string>
+    <string name="site_nav_home_fallback">Home</string>
+    <string name="site_nav_search_placeholder_format">Search %1$s…</string>
+    <string name="cd_site_nav_home">Go to site home page</string>
+    <string name="cd_site_nav_search">Search within this website</string>
+    <string name="cd_site_nav_close_search">Close site search</string>
+    <string name="cd_site_nav_domain">Website address and search</string>
+    <string name="cd_site_nav_reload">Reload or stop loading page</string>
+    <string name="cd_site_nav_share">Share current webpage</string>
+    <string name="cd_site_nav_bookmarks">Open bookmarks and reading list</string>
+    <string name="cd_site_nav_reader">Toggle distraction-free Reader View</string>
+    <string name="cd_site_nav_find">Find text on this page</string>
+    <string name="cd_site_nav_desktop">Toggle Desktop Site mode</string>
+    <string name="site_nav_reader_label">Reader</string>
+    <string name="site_nav_find_label">Find</string>
+    <string name="site_nav_desktop_label">Desktop</string>
+    <string name="site_bookmarks_quick_title">Bookmarks &amp; Reading</string>
+    <string name="site_bookmarks_save_current">Bookmark Page</string>
+    <string name="site_bookmarks_save_reading">Save to Reading</string>
+    <string name="site_bookmarks_open_all">All Bookmarks</string>
 </resources>

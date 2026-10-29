@@ -184,6 +184,25 @@ fun FavoriteSquircleIcon(
                     )
                 }
             }
+            "YOUTUBE_PLAY" -> {
+                Canvas(modifier = Modifier.size(size * 0.62f)) {
+                    val w = this.size.width
+                    val h = this.size.height
+                    drawRoundRect(
+                        color = Color(0xFFFF0033),
+                        topLeft = Offset(w * 0.06f, h * 0.18f),
+                        size = Size(w * 0.88f, h * 0.64f),
+                        cornerRadius = CornerRadius(w * 0.22f, w * 0.22f)
+                    )
+                    val playPath = Path().apply {
+                        moveTo(w * 0.41f, h * 0.35f)
+                        lineTo(w * 0.66f, h * 0.50f)
+                        lineTo(w * 0.41f, h * 0.65f)
+                        close()
+                    }
+                    drawPath(playPath, color = PureWhite)
+                }
+            }
             else -> {
                 val fg = if (site.bgStyle == "PURE_WHITE" || site.bgStyle == "SILVER_GRAY" || site.bgStyle == "BLUSH_LIGHT") {
                     PureBlack
@@ -368,7 +387,8 @@ fun EyeglassesIcon(
 }
 
 /**
- * Overlapping dual-squares Tabs icon matching the bottom-right circle button in Reference Image 2.
+ * Overlapping dual-squares Tabs icon matching the bottom-right icon in the iOS 26 Safari bar
+ * (back square cleanly occluded behind the front rounded square).
  */
 @Composable
 fun OverlappingTabsIcon(
@@ -378,25 +398,251 @@ fun OverlappingTabsIcon(
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val sw = w * 0.088f
-        val boxSize = w * 0.58f
-        val corner = CornerRadius(w * 0.14f, w * 0.14f)
+        val sw = w * 0.082f
+        val r = w * 0.13f
 
-        // Back top-left square (partial arc/rounded rect)
+        // Front bottom-right rounded square
+        val frontLeft = w * 0.29f
+        val frontTop = h * 0.29f
+        val frontSize = w * 0.59f
         drawRoundRect(
             color = tint,
-            topLeft = Offset(w * 0.12f, h * 0.12f),
-            size = Size(boxSize, boxSize),
-            cornerRadius = corner,
-            style = Stroke(width = sw)
+            topLeft = Offset(frontLeft, frontTop),
+            size = Size(frontSize, frontSize),
+            cornerRadius = CornerRadius(r, r),
+            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
-        // Front bottom-right square
-        drawRoundRect(
+
+        // Occluded back top-left rounded square (only top & left edges peeking out cleanly)
+        val backLeft = w * 0.12f
+        val backTop = h * 0.12f
+        val backRight = frontLeft + frontSize * 0.58f
+        val backBottom = frontTop + frontSize * 0.58f
+        val backPath = Path().apply {
+            moveTo(frontLeft - sw * 0.35f, backBottom)
+            lineTo(backLeft + r, backBottom)
+            quadraticTo(backLeft, backBottom, backLeft, backBottom - r)
+            lineTo(backLeft, backTop + r)
+            quadraticTo(backLeft, backTop, backLeft + r, backTop)
+            lineTo(backRight - r, backTop)
+            quadraticTo(backRight, backTop, backRight, backTop + r)
+            lineTo(backRight, frontTop - sw * 0.35f)
+        }
+        drawPath(
+            path = backPath,
             color = tint,
-            topLeft = Offset(w * 0.30f, h * 0.30f),
-            size = Size(boxSize, boxSize),
-            cornerRadius = corner,
-            style = Stroke(width = sw)
+            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
     }
 }
+
+/**
+ * iOS 26 Safari Page Menu icon (rounded rectangle over two horizontal lines) shown on the left
+ * inside the recessed URL capsule.
+ */
+@Composable
+fun SafariPageMenuIcon(
+    tint: Color,
+    modifier: Modifier = Modifier.size(19.dp)
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val sw = w * 0.088f
+        val r = w * 0.10f
+
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(w * 0.16f, h * 0.16f),
+            size = Size(w * 0.68f, h * 0.34f),
+            cornerRadius = CornerRadius(r, r),
+            style = Stroke(width = sw, join = StrokeJoin.Round)
+        )
+        drawLine(
+            color = tint,
+            start = Offset(w * 0.16f, h * 0.66f),
+            end = Offset(w * 0.84f, h * 0.66f),
+            strokeWidth = sw,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = tint,
+            start = Offset(w * 0.16f, h * 0.84f),
+            end = Offset(w * 0.62f, h * 0.84f),
+            strokeWidth = sw,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+/**
+ * iOS 26 Safari Reload clockwise circular arrow icon shown on the right inside the URL capsule.
+ */
+@Composable
+fun SafariReloadIcon(
+    tint: Color,
+    modifier: Modifier = Modifier.size(18.dp)
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val sw = w * 0.092f
+        val arcPadding = w * 0.17f
+        val arcSize = w - arcPadding * 2f
+
+        drawArc(
+            color = tint,
+            startAngle = -55f,
+            sweepAngle = -295f,
+            useCenter = false,
+            topLeft = Offset(arcPadding, arcPadding),
+            size = Size(arcSize, arcSize),
+            style = Stroke(width = sw, cap = StrokeCap.Round)
+        )
+
+        // Crisp arrowhead pointing clockwise at the top-right end of the arc
+        val tipX = w * 0.72f
+        val tipY = h * 0.25f
+        val arrow = Path().apply {
+            moveTo(tipX - w * 0.18f, tipY - h * 0.02f)
+            lineTo(tipX, tipY)
+            lineTo(tipX - w * 0.03f, tipY + h * 0.18f)
+        }
+        drawPath(
+            path = arrow,
+            color = tint,
+            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+    }
+}
+
+/**
+ * iOS 26 Safari Back (`<`) and Forward (`>`) geometric chevron icon.
+ */
+@Composable
+fun SafariChevronIcon(
+    isLeft: Boolean,
+    tint: Color,
+    modifier: Modifier = Modifier.size(21.dp)
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val sw = w * 0.085f
+        val path = Path().apply {
+            if (isLeft) {
+                moveTo(w * 0.64f, h * 0.18f)
+                lineTo(w * 0.30f, h * 0.50f)
+                lineTo(w * 0.64f, h * 0.82f)
+            } else {
+                moveTo(w * 0.36f, h * 0.18f)
+                lineTo(w * 0.70f, h * 0.50f)
+                lineTo(w * 0.36f, h * 0.82f)
+            }
+        }
+        drawPath(
+            path = path,
+            color = tint,
+            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+    }
+}
+
+/**
+ * iOS 26 Safari Share icon (open-top rounded square tray with upward arrow rising from center).
+ */
+@Composable
+fun SafariShareIcon(
+    tint: Color,
+    modifier: Modifier = Modifier.size(21.dp)
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val sw = w * 0.082f
+        val r = w * 0.13f
+
+        // Tray with open top gap around the vertical arrow shaft
+        val trayLeft = w * 0.19f
+        val trayRight = w * 0.81f
+        val trayTop = h * 0.39f
+        val trayBottom = h * 0.86f
+        val tray = Path().apply {
+            moveTo(w * 0.37f, trayTop)
+            lineTo(trayLeft + r, trayTop)
+            quadraticTo(trayLeft, trayTop, trayLeft, trayTop + r)
+            lineTo(trayLeft, trayBottom - r)
+            quadraticTo(trayLeft, trayBottom, trayLeft + r, trayBottom)
+            lineTo(trayRight - r, trayBottom)
+            quadraticTo(trayRight, trayBottom, trayRight, trayBottom - r)
+            lineTo(trayRight, trayTop + r)
+            quadraticTo(trayRight, trayTop, trayRight - r, trayTop)
+            lineTo(w * 0.63f, trayTop)
+        }
+        drawPath(
+            path = tray,
+            color = tint,
+            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+
+        // Vertical arrow shaft + chevron head
+        drawLine(
+            color = tint,
+            start = Offset(w * 0.50f, h * 0.64f),
+            end = Offset(w * 0.50f, h * 0.13f),
+            strokeWidth = sw,
+            cap = StrokeCap.Round
+        )
+        val arrowHead = Path().apply {
+            moveTo(w * 0.34f, h * 0.28f)
+            lineTo(w * 0.50f, h * 0.12f)
+            lineTo(w * 0.66f, h * 0.28f)
+        }
+        drawPath(
+            path = arrowHead,
+            color = tint,
+            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+    }
+}
+
+/**
+ * iOS 26 Safari Open Book icon (symmetrical curved open book pages meeting at a center spine).
+ */
+@Composable
+fun SafariOpenBookIcon(
+    tint: Color,
+    modifier: Modifier = Modifier.size(22.dp)
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val sw = w * 0.080f
+
+        val leftPage = Path().apply {
+            moveTo(w * 0.50f, h * 0.28f)
+            quadraticTo(w * 0.32f, h * 0.19f, w * 0.13f, h * 0.24f)
+            lineTo(w * 0.13f, h * 0.77f)
+            quadraticTo(w * 0.32f, h * 0.72f, w * 0.50f, h * 0.81f)
+            close()
+        }
+        val rightPage = Path().apply {
+            moveTo(w * 0.50f, h * 0.28f)
+            quadraticTo(w * 0.68f, h * 0.19f, w * 0.87f, h * 0.24f)
+            lineTo(w * 0.87f, h * 0.77f)
+            quadraticTo(w * 0.68f, h * 0.72f, w * 0.50f, h * 0.81f)
+            close()
+        }
+        drawPath(
+            path = leftPage,
+            color = tint,
+            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+        drawPath(
+            path = rightPage,
+            color = tint,
+            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+    }
+}
+

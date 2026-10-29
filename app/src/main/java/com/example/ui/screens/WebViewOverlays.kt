@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.WebAsset
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -268,16 +270,19 @@ fun WebToolsGlassSheet(
     isLoading: Boolean,
     isDesktopMode: Boolean,
     isReaderMode: Boolean,
+    replaceSiteNavBar: Boolean = true,
     textZoomPercent: Int,
     activeDownloadsCount: Int,
     onGoForward: () -> Unit,
     onReloadOrStop: () -> Unit,
     onToggleDesktopMode: (Boolean) -> Unit,
     onToggleReaderMode: (Boolean) -> Unit,
+    onToggleReplaceSiteNavBar: (Boolean) -> Unit = {},
     onChangeTextZoom: (Int) -> Unit,
     onOpenFindInPage: () -> Unit,
     onOpenSiriAi: () -> Unit,
     onOpenDownloadsHub: () -> Unit,
+    onReturnToStartPage: () -> Unit = {},
     onCopyUrl: () -> Unit,
     onSharePage: () -> Unit,
     onDismiss: () -> Unit
@@ -509,7 +514,17 @@ fun WebToolsGlassSheet(
                         }
                     }
 
-                    // Desktop Site & Reader Mode Switches
+                    // Custom Site Navigation Bar, Desktop Site & Reader Mode Switches
+                    item {
+                        WebToggleRow(
+                            icon = Icons.Outlined.WebAsset,
+                            title = stringResource(R.string.site_nav_replace_title),
+                            subtitle = stringResource(R.string.site_nav_replace_subtitle),
+                            checked = replaceSiteNavBar,
+                            tag = "toggle_replace_site_nav_bar",
+                            onCheckedChange = onToggleReplaceSiteNavBar
+                        )
+                    }
                     item {
                         WebToggleRow(
                             icon = Icons.Outlined.DesktopWindows,
@@ -537,6 +552,16 @@ fun WebToolsGlassSheet(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
+                            WebToolActionTile(
+                                icon = Icons.Outlined.Apps,
+                                label = stringResource(R.string.start_page_title),
+                                tag = "web_tool_start_page",
+                                onClick = {
+                                    onDismiss()
+                                    onReturnToStartPage()
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
                             WebToolActionTile(
                                 icon = Icons.Outlined.AutoAwesome,
                                 label = "Ask Siri AI",

@@ -11,6 +11,8 @@ import com.example.core.BrowserAiService
 import com.example.core.DeviceOptimizationManager
 import com.example.core.DownloadEngine
 import com.example.core.GpuRenderController
+import com.example.core.SiteNavBarVariant
+import com.example.core.SiteNavigationEngine
 import com.example.core.WallpaperLuminanceAnalyzer
 import com.example.core.configureAppCheck
 import com.example.data.BrowserDatabase
@@ -64,6 +66,77 @@ class ExampleRobolectricTest {
             BrowserRepository.normalizeUrlOrSearch("minimalist ceramics")
                 .startsWith("https://www.google.com/search?q=")
         )
+    }
+
+    @Test
+    fun `site navigation engine builds per-site bars parses extracted dom links and resolves site search`() {
+        val placeholder = SiteNavigationEngine.buildInitialPlaceholderForUrl("https://www.dezeen.com/design/interiors")
+        assertEquals("Dezeen", placeholder.siteBrand)
+        assertEquals("DZ", placeholder.monogram)
+        assertEquals("https://www.dezeen.com/", placeholder.homeUrl)
+        assertTrue(placeholder.items.any { it.label == "Home" })
+        assertTrue(placeholder.items.any { it.label == "Interiors" && it.isActive })
+
+        val bridgePayload = """
+            {
+              "origin": "https://github.com",
+              "pageUrl": "https://github.com/trending",
+              "brand": "GitHub",
+              "homeUrl": "https://github.com/",
+              "searchTemplate": "https://github.com/search?q={query}",
+              "hiddenCount": 2,
+              "items": [
+                { "label": "GitHub", "url": "https://github.com/", "isActive": false, "isAnchor": false },
+                { "label": "Product", "url": "https://github.com/features", "isActive": false, "isAnchor": false },
+                { "label": "Trending", "url": "https://github.com/trending", "isActive": true, "isAnchor": false },
+                { "label": "Pricing", "url": "https://github.com/pricing", "isActive": false, "isAnchor": false }
+              ]
+            }
+        """.trimIndent()
+
+        val parsed = SiteNavigationEngine.parseBridgeJson(bridgePayload, "https://github.com/trending")
+        assertEquals("GitHub", parsed.siteBrand)
+        assertEquals("GH", parsed.monogram)
+        assertEquals(2, parsed.hiddenNavCount)
+        assertTrue(parsed.items.any { it.label == "Home" })
+        assertTrue(parsed.items.any { it.label == "Trending" && it.isActive })
+        assertFalse("Brand logo duplicate should be represented by Home pill", parsed.items.any { it.label == "GitHub" })
+
+        val searchUrl = SiteNavigationEngine.resolveSiteSearchUrl("compose", parsed, "https://github.com/trending")
+        assertEquals("https://github.com/search?q=compose", searchUrl)
+
+        val fallbackSearch = SiteNavigationEngine.resolveSiteSearchUrl("ceramics", placeholder, "https://www.dezeen.com/design")
+        assertTrue(fallbackSearch.startsWith("https://www.google.com/search?q="))
+        assertTrue(fallbackSearch.contains("dezeen.com"))
+
+        // Minimalist site with empty DOM nav items still receives a custom per-site navigation bar
+        val sparseJson = """{"origin":"https://example.org","pageUrl":"https://example.org/docs","brand":"","homeUrl":"https://example.org/","items":[]}"""
+        val sparseNav = SiteNavigationEngine.parseBridgeJson(sparseJson, "https://example.org/docs")
+        assertEquals("Example", sparseNav.siteBrand)
+        assertEquals(SiteNavBarVariant.UNIVERSAL_LIQUID_CAPSULE, sparseNav.variant)
+        assertTrue(sparseNav.items.isNotEmpty())
+        assertTrue(sparseNav.items.any { it.label == "Docs" })
+
+        // Verify YouTube Safari Island variant preserves YouTube's original navbar & docks beneath it
+        val ytNav = SiteNavigationEngine.buildInitialPlaceholderForUrl("https://m.youtube.com/watch?v=dQw4w9WgXcQ")
+        assertEquals(SiteNavBarVariant.YOUTUBE_SAFARI_ISLAND, ytNav.variant)
+        assertEquals("youtube.com", ytNav.displayDomain)
+        assertTrue(ytNav.preservesOriginalNavBar)
+        assertTrue(ytNav.docksBeneathSiteBottomBar)
+
+        // Verify distinct per-site custom navigation bar variants for other websites
+        assertEquals(SiteNavBarVariant.EDITORIAL_READER_DECK, placeholder.variant)
+        assertEquals("dezeen.com", placeholder.displayDomain)
+        assertFalse(placeholder.preservesOriginalNavBar)
+
+        assertEquals(SiteNavBarVariant.DEV_COMMAND_HUD, parsed.variant)
+        assertEquals("github.com", parsed.displayDomain)
+        assertFalse(parsed.preservesOriginalNavBar)
+
+        val pinterestNav = SiteNavigationEngine.buildInitialPlaceholderForUrl("https://www.pinterest.com/ideas")
+        assertEquals(SiteNavBarVariant.SOCIAL_FLOATING_ORBS, pinterestNav.variant)
+        assertEquals("pinterest.com", pinterestNav.displayDomain)
+        assertTrue(pinterestNav.docksBeneathSiteBottomBar)
     }
 
     @Test
@@ -196,12 +269,21 @@ class ExampleRobolectricTest {
                 kotlinx.coroutines.delay(30)
                 org.robolectric.shadows.ShadowLooper.idleMainLooper()
                 assertTrue(vm.uiState.value.isVideoPlaying)
+                assertFalse("Inline video must not trigger fullscreen hide", vm.uiState.value.isFullscreenVideo)
 
+                vm.onWebFullscreenVideoChanged(tabId = activeTabId, isFullscreen = true)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(30)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertTrue(vm.uiState.value.isFullscreenVideo)
+
+                vm.onWebFullscreenVideoChanged(tabId = activeTabId, isFullscreen = false)
                 vm.onWebVideoPlaybackChanged(tabId = activeTabId, isPlaying = false)
                 org.robolectric.shadows.ShadowLooper.idleMainLooper()
                 kotlinx.coroutines.delay(30)
                 org.robolectric.shadows.ShadowLooper.idleMainLooper()
                 assertFalse(vm.uiState.value.isVideoPlaying)
+                assertFalse(vm.uiState.value.isFullscreenVideo)
 
                 vm.openDownloadsHub()
                 org.robolectric.shadows.ShadowLooper.idleMainLooper()
@@ -221,14 +303,73 @@ class ExampleRobolectricTest {
                 org.robolectric.shadows.ShadowLooper.idleMainLooper()
                 assertFalse(vm.uiState.value.isSiriOpen)
 
+                // Verify searchbar hides immediately on entering a site (isViewingWebPage == true)
+                // and returns when going back to Start Page (isViewingWebPage == false)
+                assertFalse(vm.uiState.value.isViewingWebPage)
+                assertTrue(vm.uiState.value.settings.replaceSiteNavBar)
+                val targetTabId = vm.uiState.value.activeTab?.id ?: activeTabId
+                vm.onWebPageStarted(targetTabId, "https://en.m.wikipedia.org/wiki/Glass")
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(30)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertTrue(vm.uiState.value.isViewingWebPage)
+                assertEquals("Wikipedia", vm.uiState.value.siteNavigation.siteBrand)
+
+                vm.onSiteNavigationJsonReceived(
+                    targetTabId,
+                    """{"origin":"https://en.m.wikipedia.org","pageUrl":"https://en.m.wikipedia.org/wiki/Glass","brand":"Wikipedia","homeUrl":"https://en.m.wikipedia.org/","hiddenCount":1,"items":[{"label":"Main page","url":"https://en.m.wikipedia.org/wiki/Main_Page","isActive":false,"isAnchor":false},{"label":"History","url":"https://en.m.wikipedia.org/wiki/Glass#History","isActive":false,"isAnchor":true}]}"""
+                )
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(30)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                val wikiItems = vm.uiState.value.siteNavigation.items
+                assertTrue(wikiItems.any { it.label == "Main page" })
+                val historyAnchor = wikiItems.first { it.label == "History" }
+                vm.onSiteNavItemClicked(historyAnchor)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(30)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertTrue(vm.uiState.value.siteNavigation.items.first { it.label == "History" }.isActive)
+
+                vm.returnToStartPage()
+                var homeAttempts = 0
+                while (vm.uiState.value.isViewingWebPage && homeAttempts < 50) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(30)
+                    homeAttempts++
+                }
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertFalse(vm.uiState.value.isViewingWebPage)
+
+                vm.setReplaceSiteNavBar(false)
+                var offAttempts = 0
+                while (vm.uiState.value.settings.replaceSiteNavBar && offAttempts < 50) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(30)
+                    offAttempts++
+                }
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertFalse(vm.uiState.value.settings.replaceSiteNavBar)
+
+                vm.setReplaceSiteNavBar(true)
+                var onAttempts = 0
+                while (!vm.uiState.value.settings.replaceSiteNavBar && onAttempts < 50) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(30)
+                    onAttempts++
+                }
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertTrue(vm.uiState.value.settings.replaceSiteNavBar)
+
                 dao.clearCompletedDownloads()
             } finally {
                 collectJob.cancel()
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
             }
         }
 
     @Test
-    fun `firebase app check debug token is persisted synchronously from launch intent`() {
+    fun `firebase app check debug token is persisted synchronously and evicts stale token cache on update`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val launchIntent = Intent().apply {
             putExtra("FIREBASE_APPCHECK_DEBUG_TOKEN", "test-debug-token-ios26")
@@ -236,14 +377,42 @@ class ExampleRobolectricTest {
         configureAppCheck(context, launchIntent)
 
         val persistenceKey = FirebaseApp.getInstance().persistenceKey
-        val prefs = context.getSharedPreferences(
+        val debugPrefs = context.getSharedPreferences(
             "com.google.firebase.appcheck.debug.store.$persistenceKey",
             Context.MODE_PRIVATE
         )
-        assertNotNull(prefs)
+        val tokenCachePrefs = context.getSharedPreferences(
+            "com.google.firebase.appcheck.store.$persistenceKey",
+            Context.MODE_PRIVATE
+        )
+        assertNotNull(debugPrefs)
         assertEquals(
             "test-debug-token-ios26",
-            prefs.getString("com.google.firebase.appcheck.debug.DEBUG_SECRET", null)
+            debugPrefs.getString("com.google.firebase.appcheck.debug.DEBUG_SECRET", null)
+        )
+
+        // Simulate a stale cached JWT stored from a prior unregistered session
+        tokenCachePrefs.edit()
+            .putString("com.google.firebase.appcheck.APP_CHECK_TOKEN", "stale-invalid-jwt")
+            .commit()
+        assertEquals(
+            "stale-invalid-jwt",
+            tokenCachePrefs.getString("com.google.firebase.appcheck.APP_CHECK_TOKEN", null)
+        )
+
+        // Simulate warm singleTask relaunch (onNewIntent) delivering a refreshed debug token
+        val refreshedIntent = Intent().apply {
+            putExtra("FIREBASE_APPCHECK_DEBUG_TOKEN", "  refreshed-debug-token-v2  ")
+        }
+        configureAppCheck(context, refreshedIntent)
+
+        assertEquals(
+            "refreshed-debug-token-v2",
+            debugPrefs.getString("com.google.firebase.appcheck.debug.DEBUG_SECRET", null)
+        )
+        assertEquals(
+            null,
+            tokenCachePrefs.getString("com.google.firebase.appcheck.APP_CHECK_TOKEN", null)
         )
     }
 

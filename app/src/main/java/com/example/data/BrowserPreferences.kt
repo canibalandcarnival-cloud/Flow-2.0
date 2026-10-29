@@ -25,6 +25,7 @@ data class BrowserSettingsState(
     val enableGpuRasterization: Boolean = true,
     val disableHardwareOverlays: Boolean = true,
     val immersiveOsMode: Boolean = true,
+    val replaceSiteNavBar: Boolean = true,
     val activeTabId: Long = -1L,
     val isPrivateMode: Boolean = false
 )
@@ -41,6 +42,7 @@ class BrowserPreferences(private val context: Context) {
         val ENABLE_GPU_RASTERIZATION = booleanPreferencesKey("enable_gpu_rasterization")
         val DISABLE_HW_OVERLAYS = booleanPreferencesKey("disable_hw_overlays")
         val IMMERSIVE_OS_MODE = booleanPreferencesKey("immersive_os_mode")
+        val REPLACE_SITE_NAV_BAR = booleanPreferencesKey("replace_site_nav_bar")
         val ACTIVE_TAB_ID = longPreferencesKey("active_tab_id")
         val IS_PRIVATE_MODE = booleanPreferencesKey("is_private_mode")
     }
@@ -56,6 +58,7 @@ class BrowserPreferences(private val context: Context) {
             enableGpuRasterization = prefs[Keys.ENABLE_GPU_RASTERIZATION] ?: true,
             disableHardwareOverlays = prefs[Keys.DISABLE_HW_OVERLAYS] ?: true,
             immersiveOsMode = prefs[Keys.IMMERSIVE_OS_MODE] ?: true,
+            replaceSiteNavBar = prefs[Keys.REPLACE_SITE_NAV_BAR] ?: true,
             activeTabId = prefs[Keys.ACTIVE_TAB_ID] ?: -1L,
             isPrivateMode = prefs[Keys.IS_PRIVATE_MODE] ?: false
         )
@@ -95,6 +98,10 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setImmersiveOsMode(enabled: Boolean) {
         context.browserDataStore.edit { it[Keys.IMMERSIVE_OS_MODE] = enabled }
+    }
+
+    suspend fun setReplaceSiteNavBar(enabled: Boolean) {
+        context.browserDataStore.edit { it[Keys.REPLACE_SITE_NAV_BAR] = enabled }
     }
 
     suspend fun setActiveTab(tabId: Long, isPrivate: Boolean) {

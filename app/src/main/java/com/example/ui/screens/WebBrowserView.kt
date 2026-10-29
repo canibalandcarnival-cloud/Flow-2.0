@@ -29,6 +29,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -42,8 +43,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -52,6 +56,7 @@ import com.example.R
 import com.example.core.DESKTOP_CHROME_USER_AGENT
 import com.example.core.DeviceOptimizationManager
 import com.example.core.GpuRenderController
+import com.example.core.SiteNavigationEngine
 import com.example.core.WebBrowserJsBridge
 import com.example.core.WebPageAiContext
 import com.example.core.WebViewBridgeScripts
@@ -82,6 +87,9 @@ fun WebBrowserView(
     forceGpuRendering: Boolean,
     enableGpuRasterization: Boolean,
     disableHardwareOverlays: Boolean,
+    replaceSiteNavBar: Boolean = true,
+    bottomWebClearance: Dp = 0.dp,
+    dockShelfColor: Color? = null,
     isTabSwitcherOpen: Boolean = false,
     deviceProfile: DeviceOptimizationManager.DeviceProfile,
     webCommand: BrowserViewModel.WebCommand?,
@@ -97,11 +105,13 @@ fun WebBrowserView(
         isPrivate: Boolean
     ) -> Unit,
     onVideoPlaybackChanged: (tabId: Long, isPlaying: Boolean) -> Unit,
+    onFullscreenVideoChanged: (tabId: Long, isFullscreen: Boolean) -> Unit = { _, _ -> },
     onSnapshotCaptured: (tabId: Long, bitmap: Bitmap) -> Unit,
     onLiveBackdropCaptured: (bitmap: Bitmap) -> Unit = {},
     onFindResultsUpdated: (activeOrdinal: Int, numberOfMatches: Int) -> Unit = { _, _ -> },
     onSslSummaryUpdated: (String) -> Unit = {},
     onPageAiContextUpdated: (WebPageAiContext) -> Unit = {},
+    onSiteNavigationJsonReceived: (tabId: Long, payloadJson: String) -> Unit = { _, _ -> },
     onDownloadRequested: (
         url: String,
         userAgent: String?,
@@ -133,7 +143,8 @@ fun WebBrowserView(
     var isInlineVideoPlaying by remember(tabId) { mutableStateOf(false) }
     var customVideoView by remember { mutableStateOf<View?>(null) }
     var customVideoCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
-    val effectiveVideoPlaying = isInlineVideoPlaying || (customVideoView != null)
+    val isFullscreenVideo = customVideoView != null
+    val effectiveVideoPlaying = isInlineVideoPlaying || isFullscreenVideo
 
     // Enhanced WebView UI states: File chooser, JS Dialogs, Long-press context menu
     var pendingFileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
@@ -152,22 +163,29 @@ fun WebBrowserView(
     val currentTabId by rememberUpdatedState(tabId)
     val currentPrivate by rememberUpdatedState(isPrivate)
     val currentGpuRaster by rememberUpdatedState(enableGpuRasterization)
+    val currentReplaceSiteNav by rememberUpdatedState(replaceSiteNavBar)
     val currentDeviceProfile by rememberUpdatedState(deviceProfile)
     val onStartedLatest by rememberUpdatedState(onPageStarted)
     val onProgressLatest by rememberUpdatedState(onProgressChanged)
     val onFinishedLatest by rememberUpdatedState(onPageFinished)
     val onVideoPlaybackLatest by rememberUpdatedState(onVideoPlaybackChanged)
+    val onFullscreenVideoLatest by rememberUpdatedState(onFullscreenVideoChanged)
     val onSnapshotLatest by rememberUpdatedState(onSnapshotCaptured)
     val onLiveBackdropLatest by rememberUpdatedState(onLiveBackdropCaptured)
     val onFindResultsLatest by rememberUpdatedState(onFindResultsUpdated)
     val onSslSummaryLatest by rememberUpdatedState(onSslSummaryUpdated)
     val onPageAiContextLatest by rememberUpdatedState(onPageAiContextUpdated)
+    val onSiteNavigationJsonLatest by rememberUpdatedState(onSiteNavigationJsonReceived)
     val onDownloadLatest by rememberUpdatedState(onDownloadRequested)
     val onBlobDownloadLatest by rememberUpdatedState(onSaveBlobDownload)
     val onBounceLatest by rememberUpdatedState(onEdgeBounce)
 
     LaunchedEffect(currentTabId, effectiveVideoPlaying) {
         onVideoPlaybackLatest(currentTabId, effectiveVideoPlaying)
+    }
+
+    LaunchedEffect(currentTabId, isFullscreenVideo) {
+        onFullscreenVideoLatest(currentTabId, isFullscreenVideo)
     }
 
     BackHandler(enabled = customVideoView != null || hitContextTarget != null || activeJsDialog != null) {
@@ -218,6 +236,7 @@ fun WebBrowserView(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             onVideoPlaybackLatest(currentTabId, false)
+            onFullscreenVideoLatest(currentTabId, false)
         }
     }
 
@@ -275,8 +294,20 @@ fun WebBrowserView(
             is BrowserViewModel.WebCommand.SetTextZoom -> {
                 wv.settings.textZoom = cmd.zoomPercent
             }
+            is BrowserViewModel.WebCommand.SetReplaceSiteNavBar -> {
+                SiteNavigationEngine.injectSiteNavigationReplacement(wv, cmd.enabled)
+            }
+            is BrowserViewModel.WebCommand.NavigateSiteItem -> {
+                isInlineVideoPlaying = false
+                SiteNavigationEngine.navigateOrScrollItem(wv, cmd.item)
+            }
         }
         onConsumeCommand()
+    }
+
+    LaunchedEffect(webViewRef, replaceSiteNavBar) {
+        val wv = webViewRef ?: return@LaunchedEffect
+        SiteNavigationEngine.injectSiteNavigationReplacement(wv, replaceSiteNavBar)
     }
 
     LaunchedEffect(
@@ -343,12 +374,13 @@ fun WebBrowserView(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(style.glassBaseColor)
+            .background(dockShelfColor ?: style.glassBaseColor)
     ) {
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                .padding(bottom = bottomWebClearance)
                 .testTag("active_webview")
                 .graphicsLayer {
                     translationY = rubberY.value
@@ -398,6 +430,9 @@ fun WebBrowserView(
                             },
                             onPageAiContextReceived = { aiCtx ->
                                 onPageAiContextLatest(aiCtx)
+                            },
+                            onSiteNavigationReceived = { navJson ->
+                                onSiteNavigationJsonLatest(currentTabId, navJson)
                             }
                         ),
                         "GlassVideoBridge"
@@ -590,6 +625,7 @@ fun WebBrowserView(
                                 enableGpuRasterization = currentGpuRaster
                             )
                             WebViewBridgeScripts.injectVideoAndAiContextObservers(wv)
+                            SiteNavigationEngine.injectSiteNavigationReplacement(wv, currentReplaceSiteNav)
                             onSslSummaryLatest(WebViewBridgeScripts.buildSslSummary(wv, finalUrl))
                             onFinishedLatest(
                                 currentTabId,
@@ -619,6 +655,7 @@ fun WebBrowserView(
                             if (view != null && (newProgress == 35 || newProgress == 65 || newProgress == 100)) {
                                 GpuRenderController.injectPageSfProTypography(view)
                                 WebViewBridgeScripts.injectVideoAndAiContextObservers(view)
+                                SiteNavigationEngine.injectSiteNavigationReplacement(view, currentReplaceSiteNav)
                             }
                         }
 

@@ -8,8 +8,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -18,7 +21,9 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,21 +32,29 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -64,11 +77,14 @@ import com.example.core.DisplayRefreshRateManager
 import com.example.core.GpuRenderController
 import com.example.core.OsShellManager
 import com.example.core.SiriAiUiState
+import com.example.core.SiteNavBarVariant
 import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
 import com.example.ui.components.GlassMotionTracker
 import com.example.ui.components.LocalSpatialBackdrop
+import com.example.ui.components.OverlappingTabsIcon
 import com.example.ui.components.SpatialBackdropState
+import com.example.ui.components.bouncyClickable
 import com.example.ui.components.configureBlurLayer
 import com.example.ui.screens.AddressSearchOverlay
 import com.example.ui.screens.BottomBrowserGlassBar
@@ -77,6 +93,9 @@ import com.example.ui.screens.FindInPageGlassBar
 import com.example.ui.screens.NewTabGroupDialog
 import com.example.ui.screens.SiriIos26AssistantOverlay
 import com.example.ui.screens.SiriIos26PerimeterAura
+import com.example.ui.screens.SiriLiquidOrbIcon
+import com.example.ui.screens.SiteBookmarksQuickSheet
+import com.example.ui.screens.SiteGlassNavigationBar
 import com.example.ui.screens.TabSwitcherOverlay
 import com.example.ui.screens.TopSegmentedGlassBar
 import com.example.ui.screens.WallpaperAndSettingsSheet
@@ -111,6 +130,7 @@ fun GlassBrowserApp(
     }
     var isNewGroupDialogOpen by remember { mutableStateOf(false) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
+    var siteBarMeasuredHeightPx by remember { mutableIntStateOf(0) }
     val glassMotionTracker = remember { GlassMotionTracker() }
 
     // Refresh OS Role status (ROLE_HOME / ROLE_BROWSER) and re-apply immersive OS bars on resume
@@ -196,8 +216,16 @@ fun GlassBrowserApp(
             uiState.isViewingWebPage -> !uiState.settings.isDarkMode
             else -> uiState.isWallpaperLight
         }
+        val useLightNavBarIcons = if (
+            uiState.isViewingWebPage &&
+            uiState.siteNavigation.variant == SiteNavBarVariant.YOUTUBE_SAFARI_ISLAND
+        ) {
+            false
+        } else {
+            !uiState.settings.isDarkMode
+        }
         insetsController.isAppearanceLightStatusBars = useDarkStatusIcons
-        insetsController.isAppearanceLightNavigationBars = !uiState.settings.isDarkMode
+        insetsController.isAppearanceLightNavigationBars = useLightNavBarIcons
     }
 
     val osRoleRequestLauncher = rememberLauncherForActivityResult(
@@ -216,6 +244,7 @@ fun GlassBrowserApp(
 
     val hasInternalBackTarget = isNewGroupDialogOpen ||
         uiState.isSiriOpen ||
+        uiState.isSiteBookmarksSheetOpen ||
         uiState.isWebToolsSheetOpen ||
         uiState.isFindInPageOpen ||
         uiState.isAddressOverlayOpen ||
@@ -293,10 +322,40 @@ fun GlassBrowserApp(
     val isSiriBusy = uiState.siriAiState is SiriAiUiState.Loading ||
         uiState.siriAiState is SiriAiUiState.Streaming
 
+    val isSiteNavBarVisible = uiState.isViewingWebPage &&
+        uiState.settings.replaceSiteNavBar &&
+        !uiState.isTabSwitcherOpen &&
+        !uiState.isAddressOverlayOpen &&
+        !uiState.isSiriOpen &&
+        !uiState.isFullscreenVideo
+
+    val measuredSiteBarDp = if (siteBarMeasuredHeightPx > 0) {
+        with(density) { siteBarMeasuredHeightPx.toDp() }
+    } else {
+        120.dp + navBottomInset
+    }
+    val targetBottomWebClearance = if (
+        isSiteNavBarVisible && uiState.siteNavigation.docksBeneathSiteBottomBar
+    ) {
+        measuredSiteBarDp
+    } else {
+        0.dp
+    }
+    val animatedBottomWebClearance by animateDpAsState(
+        targetValue = targetBottomWebClearance,
+        animationSpec = spring(dampingRatio = 0.78f, stiffness = 380f),
+        label = "bottomWebClearance"
+    )
+
     GlassBrowserTheme(
         darkTheme = uiState.settings.isDarkMode
     ) {
         val style = LocalGlassStyle.current
+        val activeDockShelfColor = when {
+            uiState.siteNavigation.variant == SiteNavBarVariant.YOUTUBE_SAFARI_ISLAND -> Color(0xFF0B0B0D)
+            uiState.siteNavigation.docksBeneathSiteBottomBar && uiState.settings.isDarkMode -> Color(0xFF0C0C0E)
+            else -> style.glassBaseColor
+        }
 
         CompositionLocalProvider(LocalSpatialBackdrop provides spatialBackdrop) {
             Box(
@@ -306,7 +365,7 @@ fun GlassBrowserApp(
                     .onSizeChanged { rootSize = it }
             ) {
                 // =========================================================================
-                // PLANE 1: Isolated Browser Content (Full-Bleed WebView on Sites; Untinted Wallpaper on Start Page)
+                // PLANE 1: Isolated Browser Content (WebView docked above Safari Island on YouTube; Full-Bleed elsewhere)
                 // =========================================================================
                 Box(
                     modifier = Modifier
@@ -330,6 +389,9 @@ fun GlassBrowserApp(
                             forceGpuRendering = uiState.settings.forceGpuRendering,
                             enableGpuRasterization = uiState.settings.enableGpuRasterization,
                             disableHardwareOverlays = uiState.settings.disableHardwareOverlays,
+                            replaceSiteNavBar = uiState.settings.replaceSiteNavBar,
+                            bottomWebClearance = animatedBottomWebClearance,
+                            dockShelfColor = activeDockShelfColor,
                             isTabSwitcherOpen = uiState.isTabSwitcherOpen,
                             deviceProfile = uiState.deviceProfile,
                             webCommand = webCommand,
@@ -338,11 +400,13 @@ fun GlassBrowserApp(
                             onProgressChanged = viewModel::onWebProgressChanged,
                             onPageFinished = viewModel::onWebPageFinished,
                             onVideoPlaybackChanged = viewModel::onWebVideoPlaybackChanged,
+                            onFullscreenVideoChanged = viewModel::onWebFullscreenVideoChanged,
                             onSnapshotCaptured = viewModel::updateTabSnapshot,
                             onLiveBackdropCaptured = viewModel::updateLiveWebBackdropOnly,
                             onFindResultsUpdated = viewModel::onFindResultsUpdated,
                             onSslSummaryUpdated = viewModel::updateSslCertificateSummary,
                             onPageAiContextUpdated = viewModel::updatePageAiContext,
+                            onSiteNavigationJsonReceived = viewModel::onSiteNavigationJsonReceived,
                             onDownloadRequested = viewModel::startWebOrDirectDownload,
                             onSaveBlobDownload = viewModel::saveBlobBase64Download,
                             onOpenUrlInNewTab = viewModel::openUrlInNewTab,
@@ -448,6 +512,136 @@ fun GlassBrowserApp(
                     )
                 }
 
+                // Custom Per-Site Bottom Navigation Bar (docks beneath YouTube's original bottom bar
+                // and adapts into distinct per-site designs across Editorial, Developer, Social, and Universal sites)
+                AnimatedVisibility(
+                    visible = isSiteNavBarVisible,
+                    enter = fadeIn(animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)) +
+                        slideInVertically(
+                            initialOffsetY = { it },
+                            animationSpec = spring(dampingRatio = 0.70f, stiffness = 340f)
+                        ),
+                    exit = slideOutVertically(
+                        targetOffsetY = { it },
+                        animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)
+                    ) + fadeOut(animationSpec = tween(durationMillis = 220)),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .onSizeChanged { siteBarMeasuredHeightPx = it.height }
+                ) {
+                    SiteGlassNavigationBar(
+                        navData = uiState.siteNavigation,
+                        currentUrl = uiState.activeTab?.url.orEmpty(),
+                        isLoading = uiState.isLoadingWebPage,
+                        loadProgress = uiState.webLoadProgress,
+                        canGoBack = uiState.canWebGoBack,
+                        canGoForward = uiState.canWebGoForward,
+                        isReaderMode = uiState.isReaderMode,
+                        isDesktopMode = uiState.isDesktopMode,
+                        isSiriActive = uiState.isSiriOpen || isSiriBusy,
+                        onHomeClick = viewModel::onSiteHomeClicked,
+                        onNavItemClick = viewModel::onSiteNavItemClicked,
+                        onDomainClick = viewModel::openAddressOverlay,
+                        onBackClick = viewModel::onBackButtonClicked,
+                        onForwardClick = viewModel::goForwardWebPage,
+                        onReloadOrStopClick = viewModel::stopOrReloadWebPage,
+                        onShareClick = {
+                            viewModel.sharePageUrl(
+                                context = context,
+                                title = uiState.activeTab?.title.orEmpty(),
+                                url = uiState.activeTab?.url.orEmpty()
+                            )
+                        },
+                        onBookmarksClick = { viewModel.setSiteBookmarksSheetOpen(true) },
+                        onToggleReaderClick = { viewModel.toggleReaderMode(!uiState.isReaderMode) },
+                        onOpenFindClick = viewModel::openFindInPage,
+                        onToggleDesktopClick = { viewModel.toggleDesktopMode(!uiState.isDesktopMode) },
+                        onSiriClick = viewModel::toggleSiriOverlay,
+                        onWebToolsClick = { viewModel.setWebToolsSheetOpen(true) },
+                        onTabsClick = viewModel::openTabSwitcher
+                    )
+                }
+
+                // Minimal corner controls pill if the user manually turns off Custom Site Navigation Bar
+                AnimatedVisibility(
+                    visible = uiState.isViewingWebPage &&
+                        !uiState.settings.replaceSiteNavBar &&
+                        !uiState.isTabSwitcherOpen &&
+                        !uiState.isSiriOpen &&
+                        !uiState.isFullscreenVideo,
+                    enter = fadeIn(spring(stiffness = 400f)) +
+                        slideInVertically(initialOffsetY = { -it }),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { -it }),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    FrostedGlassBox(
+                        shape = RoundedCornerShape(50),
+                        elevation = GlassElevation.FLOATING_BAR,
+                        useLiveSceneBackdrop = true
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .minimumInteractiveComponentSize()
+                                    .bouncyClickable(
+                                        pressedScale = 0.86f,
+                                        contentDescriptionText = "Open Siri AI Assistant",
+                                        onClick = viewModel::toggleSiriOverlay
+                                    )
+                            ) {
+                                SiriLiquidOrbIcon(
+                                    isThinking = uiState.isSiriOpen || isSiriBusy,
+                                    size = 21.dp
+                                )
+                            }
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .minimumInteractiveComponentSize()
+                                    .bouncyClickable(
+                                        pressedScale = 0.86f,
+                                        contentDescriptionText = "Open WebView tools and controls",
+                                        onClick = { viewModel.setWebToolsSheetOpen(true) }
+                                    )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.MoreHoriz,
+                                    contentDescription = "Open WebView tools and controls",
+                                    tint = style.contentPrimary,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .minimumInteractiveComponentSize()
+                                    .bouncyClickable(
+                                        pressedScale = 0.86f,
+                                        contentDescriptionText = "Open tab switcher",
+                                        onClick = viewModel::openTabSwitcher
+                                    )
+                            ) {
+                                OverlappingTabsIcon(
+                                    tint = style.contentPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Floating & Draggable Find-in-Page Frosted Bar when viewing a webpage
                 AnimatedVisibility(
                     visible = uiState.isViewingWebPage &&
@@ -470,28 +664,30 @@ fun GlassBrowserApp(
                     )
                 }
 
-                // Bottom Floating & Movable Browser Glass Bar (Back + Search/URL + Siri Orb + Tabs)
-                val isBottomBarVisible = !uiState.isTabSwitcherOpen &&
+                // Bottom Floating & Movable Browser Search Bar:
+                // Removed when inside a website with a smooth downward slide-out animation,
+                // and animates back up when returning to the Start Page.
+                val isBottomBarVisible = !uiState.isViewingWebPage &&
+                    !uiState.isTabSwitcherOpen &&
                     !uiState.isAddressOverlayOpen &&
-                    !uiState.isSiriOpen &&
-                    !(uiState.isViewingWebPage && uiState.isVideoPlaying)
+                    !uiState.isSiriOpen
 
                 AnimatedVisibility(
                     visible = isBottomBarVisible,
-                    enter = fadeIn(animationSpec = spring(stiffness = 380f)) +
+                    enter = fadeIn(animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing)) +
                         slideInVertically(
-                            initialOffsetY = { fullHeight -> (fullHeight * 1.35f).toInt() },
-                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 340f)
+                            initialOffsetY = { fullHeight -> (fullHeight * 2.0f).toInt() },
+                            animationSpec = spring(dampingRatio = 0.72f, stiffness = 320f)
                         ),
-                    exit = fadeOut(animationSpec = spring(stiffness = 360f)) +
-                        slideOutVertically(
-                            targetOffsetY = { fullHeight -> (fullHeight * 1.35f).toInt() },
-                            animationSpec = spring(dampingRatio = 0.80f, stiffness = 300f)
-                        ),
+                    exit = slideOutVertically(
+                        targetOffsetY = { fullHeight -> (fullHeight * 2.2f).toInt() },
+                        animationSpec = tween(durationMillis = 380, easing = FastOutSlowInEasing)
+                    ) + fadeOut(
+                        animationSpec = tween(durationMillis = 300, delayMillis = 80, easing = FastOutSlowInEasing)
+                    ),
                     modifier = Modifier.align(Alignment.BottomCenter)
                 ) {
-                    val canGoBack = uiState.isViewingWebPage ||
-                        uiState.activeSection != TopHubSection.START_PAGE
+                    val canGoBack = uiState.activeSection != TopHubSection.START_PAGE
                     BottomBrowserGlassBar(
                         currentUrl = uiState.activeTab?.url.orEmpty(),
                         canNavigateBack = canGoBack,
@@ -501,13 +697,7 @@ fun GlassBrowserApp(
                         isSiriActive = uiState.isSiriOpen || isSiriBusy,
                         onBackClick = viewModel::onBackButtonClicked,
                         onAddressBarClick = viewModel::openAddressOverlay,
-                        onWebToolsOrVoiceClick = {
-                            if (uiState.isViewingWebPage) {
-                                viewModel.setWebToolsSheetOpen(true)
-                            } else {
-                                viewModel.toggleSiriOverlay()
-                            }
-                        },
+                        onWebToolsOrVoiceClick = viewModel::toggleSiriOverlay,
                         onSiriClick = viewModel::toggleSiriOverlay,
                         onTabsClick = viewModel::openTabSwitcher,
                         modifier = Modifier
@@ -547,16 +737,20 @@ fun GlassBrowserApp(
                     )
                 }
 
-                // Omnibox URL / Search Frosted Overlay
+                // Omnibox URL / Search Frosted Overlay (slides downward off-screen when navigating into a site)
                 AnimatedVisibility(
                     visible = uiState.isAddressOverlayOpen,
                     enter = fadeIn(spring(stiffness = 450f)) +
                         slideInVertically(
-                            initialOffsetY = { it / 3 },
+                            initialOffsetY = { it / 2 },
                             animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f)
                         ),
-                    exit = fadeOut(spring(stiffness = 500f)) +
-                        slideOutVertically(targetOffsetY = { it / 3 })
+                    exit = slideOutVertically(
+                        targetOffsetY = { fullHeight -> fullHeight },
+                        animationSpec = tween(durationMillis = 360, easing = FastOutSlowInEasing)
+                    ) + fadeOut(
+                        animationSpec = tween(durationMillis = 280, delayMillis = 60, easing = FastOutSlowInEasing)
+                    )
                 ) {
                     AddressSearchOverlay(
                         currentUrl = uiState.activeTab?.url.orEmpty(),
@@ -592,16 +786,19 @@ fun GlassBrowserApp(
                         isLoading = uiState.isLoadingWebPage,
                         isDesktopMode = uiState.isDesktopMode,
                         isReaderMode = uiState.isReaderMode,
+                        replaceSiteNavBar = uiState.settings.replaceSiteNavBar,
                         textZoomPercent = uiState.webTextZoom,
                         activeDownloadsCount = uiState.activeDownloadsCount,
                         onGoForward = viewModel::goForwardWebPage,
                         onReloadOrStop = viewModel::stopOrReloadWebPage,
                         onToggleDesktopMode = viewModel::toggleDesktopMode,
                         onToggleReaderMode = viewModel::toggleReaderMode,
+                        onToggleReplaceSiteNavBar = viewModel::setReplaceSiteNavBar,
                         onChangeTextZoom = viewModel::updateWebTextZoom,
                         onOpenFindInPage = viewModel::openFindInPage,
                         onOpenSiriAi = viewModel::toggleSiriOverlay,
                         onOpenDownloadsHub = viewModel::openDownloadsHub,
+                        onReturnToStartPage = viewModel::returnToStartPage,
                         onCopyUrl = {
                             viewModel.copyUrlToClipboard(
                                 context = context,
@@ -616,6 +813,28 @@ fun GlassBrowserApp(
                             )
                         },
                         onDismiss = { viewModel.setWebToolsSheetOpen(false) }
+                    )
+                }
+
+                // Quick Bookmarks & Reading Sheet opened from `📖` in YouTube / Per-Site Navigation Bars
+                AnimatedVisibility(
+                    visible = uiState.isSiteBookmarksSheetOpen,
+                    enter = fadeIn(spring(stiffness = 420f)) +
+                        slideInVertically(
+                            initialOffsetY = { it / 2 },
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 360f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { it / 2 })
+                ) {
+                    SiteBookmarksQuickSheet(
+                        bookmarks = uiState.bookmarks,
+                        favorites = uiState.favorites,
+                        onSaveBookmark = viewModel::saveCurrentPageToBookmarks,
+                        onSaveToReadingList = viewModel::saveCurrentPageToReadingList,
+                        onOpenUrl = viewModel::openUrlOrSearch,
+                        onOpenAllBookmarksHub = viewModel::openBookmarksHub,
+                        onDismiss = { viewModel.setSiteBookmarksSheetOpen(false) }
                     )
                 }
 
@@ -669,6 +888,7 @@ fun GlassBrowserApp(
                             } catch (_: Throwable) {}
                         },
                         onToggleImmersiveOsMode = viewModel::setImmersiveOsMode,
+                        onToggleReplaceSiteNavBar = viewModel::setReplaceSiteNavBar,
                         onToggleHighRefresh = viewModel::setHighRefreshRateEnabled,
                         onToggleForceGpu = viewModel::setForceGpuRendering,
                         onToggleGpuRasterization = viewModel::setEnableGpuRasterization,

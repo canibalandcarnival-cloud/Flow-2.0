@@ -2,6 +2,7 @@ package com.example.data
 
 import android.net.Uri
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import java.io.File
 
 class BrowserRepository(
@@ -21,6 +22,14 @@ class BrowserRepository(
         if (dao.countFavorites() == 0) {
             dao.insertFavorites(
                 listOf(
+                    FavoriteSiteEntity(
+                        title = "YouTube",
+                        url = "https://m.youtube.com",
+                        iconType = "YOUTUBE_PLAY",
+                        monogram = "YT",
+                        bgStyle = "PURE_BLACK",
+                        sortOrder = -1
+                    ),
                     FavoriteSiteEntity(
                         title = "Curious and Wondrous Travels",
                         url = "https://www.atlasobscura.com",
@@ -119,6 +128,20 @@ class BrowserRepository(
                     )
                 )
             )
+        } else if (dao.countFavorites() == 12) {
+            val currentFavs = dao.observeFavorites().first()
+            if (currentFavs.none { it.url.contains("youtube.com", ignoreCase = true) }) {
+                dao.insertFavorite(
+                    FavoriteSiteEntity(
+                        title = "YouTube",
+                        url = "https://m.youtube.com",
+                        iconType = "YOUTUBE_PLAY",
+                        monogram = "YT",
+                        bgStyle = "PURE_BLACK",
+                        sortOrder = -1
+                    )
+                )
+            }
         }
 
         if (dao.countReadingList() == 0) {
@@ -172,6 +195,11 @@ class BrowserRepository(
         if (dao.countBookmarks() == 0) {
             dao.insertBookmarks(
                 listOf(
+                    BookmarkEntity(
+                        title = "YouTube",
+                        url = "https://m.youtube.com",
+                        folder = "Media"
+                    ),
                     BookmarkEntity(
                         title = "Wikipedia — Free Encyclopedia",
                         url = "https://en.m.wikipedia.org",
@@ -411,6 +439,7 @@ class BrowserRepository(
     suspend fun setEnableGpuRasterization(enabled: Boolean) = preferences.setEnableGpuRasterization(enabled)
     suspend fun setDisableHardwareOverlays(enabled: Boolean) = preferences.setDisableHardwareOverlays(enabled)
     suspend fun setImmersiveOsMode(enabled: Boolean) = preferences.setImmersiveOsMode(enabled)
+    suspend fun setReplaceSiteNavBar(enabled: Boolean) = preferences.setReplaceSiteNavBar(enabled)
     suspend fun setPrivateMode(isPrivate: Boolean, fallbackTabId: Long) =
         preferences.setActiveTab(fallbackTabId, isPrivate)
 

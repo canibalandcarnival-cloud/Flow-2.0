@@ -23,6 +23,9 @@ import com.example.core.FeedbackManager
 import com.example.core.ResolvedWallpaper
 import com.example.core.SiriAiUiState
 import com.example.core.SiriChatTurn
+import com.example.core.SiteNavItem
+import com.example.core.SiteNavigationBarData
+import com.example.core.SiteNavigationEngine
 import com.example.core.WallpaperLuminanceAnalyzer
 import com.example.core.WebPageAiContext
 import com.example.data.BookmarkEntity
@@ -96,9 +99,12 @@ data class BrowserUiState(
     val isTabSearchActive: Boolean = false,
     val isLoadingWebPage: Boolean = false,
     val isVideoPlaying: Boolean = false,
+    val isFullscreenVideo: Boolean = false,
+    val isSiteBookmarksSheetOpen: Boolean = false,
     val webLoadProgress: Float = 0f,
     val canWebGoBack: Boolean = false,
     val canWebGoForward: Boolean = false,
+    val siteNavigation: SiteNavigationBarData = SiteNavigationBarData(),
     val statusToast: String? = null
 ) {
     val activeTab: BrowserTabEntity?
@@ -107,7 +113,7 @@ data class BrowserUiState(
             ?: allTabs.firstOrNull()
 
     val isViewingWebPage: Boolean
-        get() = !activeTab?.url.isNullOrBlank()
+        get() = !activeTab?.url.isNullOrBlank() || siteNavigation.siteBrand.isNotBlank()
 
     val modeTabs: List<BrowserTabEntity>
         get() = allTabs.filter { it.isPrivate == settings.isPrivateMode }
@@ -164,6 +170,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         data class SetDesktopMode(val enabled: Boolean, val nonce: Long = System.nanoTime()) : WebCommand
         data class SetReaderMode(val enabled: Boolean, val nonce: Long = System.nanoTime()) : WebCommand
         data class SetTextZoom(val zoomPercent: Int, val nonce: Long = System.nanoTime()) : WebCommand
+        data class SetReplaceSiteNavBar(val enabled: Boolean, val nonce: Long = System.nanoTime()) : WebCommand
+        data class NavigateSiteItem(val item: SiteNavItem, val nonce: Long = System.nanoTime()) : WebCommand
     }
 
     private data class TransientUiState(
@@ -190,9 +198,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val isTabSearchActive: Boolean = false,
         val isLoadingWebPage: Boolean = false,
         val isVideoPlaying: Boolean = false,
+        val isFullscreenVideo: Boolean = false,
+        val isSiteBookmarksSheetOpen: Boolean = false,
         val webLoadProgress: Float = 0f,
         val canWebGoBack: Boolean = false,
         val canWebGoForward: Boolean = false,
+        val siteNavByTab: Map<Long, SiteNavigationBarData> = emptyMap(),
         val statusToast: String? = null
     )
 
@@ -236,6 +247,29 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         feedback.sfxEnabled = settings.sfxEnabled
         feedback.hapticsEnabled = settings.hapticsEnabled
 
+        val currentActiveTab = tabs.firstOrNull { it.id == settings.activeTabId }
+            ?: tabs.firstOrNull { it.isPrivate == settings.isPrivateMode }
+            ?: tabs.firstOrNull()
+        val activeUrl = currentActiveTab?.url.orEmpty()
+        val cachedForActive = currentActiveTab?.let { transient.siteNavByTab[it.id] }
+        val resolvedSiteNav = when {
+            currentActiveTab == null -> SiteNavigationBarData()
+            activeUrl.isNotBlank() -> {
+                val activeHost = BrowserRepository.extractDomain(activeUrl)
+                val cachedHost = BrowserRepository.extractDomain(cachedForActive?.homeUrl.orEmpty())
+                if (cachedForActive != null &&
+                    cachedForActive.items.isNotEmpty() &&
+                    cachedHost.equals(activeHost, ignoreCase = true)
+                ) {
+                    cachedForActive
+                } else {
+                    SiteNavigationEngine.buildInitialPlaceholderForUrl(activeUrl)
+                }
+            }
+            cachedForActive != null && cachedForActive.siteBrand.isNotBlank() -> cachedForActive
+            else -> SiteNavigationBarData()
+        }
+
         BrowserUiState(
             isReady = isSeeded,
             settings = settings,
@@ -271,9 +305,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             isTabSearchActive = transient.isTabSearchActive,
             isLoadingWebPage = transient.isLoadingWebPage,
             isVideoPlaying = transient.isVideoPlaying,
+            isFullscreenVideo = transient.isFullscreenVideo,
+            isSiteBookmarksSheetOpen = transient.isSiteBookmarksSheetOpen,
             webLoadProgress = transient.webLoadProgress,
             canWebGoBack = transient.canWebGoBack,
             canWebGoForward = transient.canWebGoForward,
+            siteNavigation = resolvedSiteNav,
             statusToast = transient.statusToast
         )
     }.stateIn(
@@ -341,8 +378,43 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                         canWebGoForward = false,
                         isLoadingWebPage = false,
                         isVideoPlaying = false,
+                        isFullscreenVideo = false,
+                        isSiteBookmarksSheetOpen = false,
                         isFindInPageOpen = false,
-                        webLoadProgress = 0f
+                        webLoadProgress = 0f,
+                        siteNavByTab = st.siteNavByTab - active.id
+                    )
+                }
+            }
+        }
+    }
+
+    fun openBookmarksHub() {
+        feedback.onSegmentSwitch()
+        transientState.update {
+            it.copy(
+                activeSection = TopHubSection.BOOKMARKS,
+                isSiteBookmarksSheetOpen = false,
+                isWebToolsSheetOpen = false,
+                isAddressOverlayOpen = false,
+                isTabSwitcherOpen = false
+            )
+        }
+        val active = uiState.value.activeTab
+        if (active != null && active.url.isNotBlank()) {
+            viewModelScope.launch {
+                repository.updateTabNavigation(active.id, "", "Start Page")
+                transientState.update { st ->
+                    st.copy(
+                        canWebGoBack = false,
+                        canWebGoForward = false,
+                        isLoadingWebPage = false,
+                        isVideoPlaying = false,
+                        isFullscreenVideo = false,
+                        isSiteBookmarksSheetOpen = false,
+                        isFindInPageOpen = false,
+                        webLoadProgress = 0f,
+                        siteNavByTab = st.siteNavByTab - active.id
                     )
                 }
             }
@@ -416,6 +488,19 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         transientState.update {
             it.copy(
                 isWebToolsSheetOpen = open,
+                isSiteBookmarksSheetOpen = false,
+                isAddressOverlayOpen = false,
+                isSiriOpen = false
+            )
+        }
+    }
+
+    fun setSiteBookmarksSheetOpen(open: Boolean) {
+        feedback.onGlassTap()
+        transientState.update {
+            it.copy(
+                isSiteBookmarksSheetOpen = open,
+                isWebToolsSheetOpen = false,
                 isAddressOverlayOpen = false,
                 isSiriOpen = false
             )
@@ -645,17 +730,25 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val normalized = BrowserRepository.normalizeUrlOrSearch(rawInput)
         if (normalized.isBlank()) return
         feedback.onGlassTap()
-        transientState.update {
-            it.copy(
+        val current = uiState.value.activeTab
+        val placeholderNav = SiteNavigationEngine.buildInitialPlaceholderForUrl(normalized)
+        transientState.update { st ->
+            st.copy(
                 isAddressOverlayOpen = false,
                 isTabSwitcherOpen = false,
                 isWebToolsSheetOpen = false,
+                isSiteBookmarksSheetOpen = false,
                 isVideoPlaying = false,
-                isReaderMode = false
+                isFullscreenVideo = false,
+                isReaderMode = false,
+                siteNavByTab = if (current != null) {
+                    st.siteNavByTab + (current.id to placeholderNav)
+                } else {
+                    st.siteNavByTab
+                }
             )
         }
         viewModelScope.launch {
-            val current = uiState.value.activeTab
             if (current == null) {
                 repository.createNewTab(
                     isPrivate = uiState.value.settings.isPrivateMode,
@@ -764,6 +857,71 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         transientState.update { it.copy(sslCertificateSummary = summary) }
     }
 
+    fun onSiteNavigationJsonReceived(tabId: Long, payloadJson: String) {
+        val fallbackUrl = uiState.value.allTabs.firstOrNull { it.id == tabId }?.url
+            ?: uiState.value.activeTab?.url.orEmpty()
+        val parsed = SiteNavigationEngine.parseBridgeJson(payloadJson, fallbackUrl)
+        transientState.update { st ->
+            st.copy(siteNavByTab = st.siteNavByTab + (tabId to parsed))
+        }
+    }
+
+    fun onSiteHomeClicked() {
+        val state = uiState.value
+        val targetHome = state.siteNavigation.homeUrl.ifBlank {
+            val activeUrl = state.activeTab?.url.orEmpty()
+            SiteNavigationEngine.buildInitialPlaceholderForUrl(activeUrl).homeUrl
+        }
+        if (targetHome.isNotBlank()) {
+            openUrlOrSearch(targetHome)
+        }
+    }
+
+    fun onSiteNavItemClicked(item: SiteNavItem) {
+        if (item.url.isBlank()) return
+        feedback.onSegmentSwitch()
+        val activeTab = uiState.value.activeTab ?: return
+        transientState.update { st ->
+            val existing = st.siteNavByTab[activeTab.id] ?: uiState.value.siteNavigation
+            val updatedItems = existing.items.map { candidate ->
+                candidate.copy(isActive = candidate.url == item.url && candidate.label == item.label)
+            }
+            st.copy(
+                siteNavByTab = st.siteNavByTab + (activeTab.id to existing.copy(items = updatedItems))
+            )
+        }
+        if (!item.isAnchor && (item.url.startsWith("http://", true) || item.url.startsWith("https://", true))) {
+            viewModelScope.launch {
+                repository.updateTabNavigation(activeTab.id, item.url, null)
+            }
+        }
+        _webCommand.value = WebCommand.NavigateSiteItem(item)
+    }
+
+    fun submitSiteSearch(query: String) {
+        val state = uiState.value
+        val targetUrl = SiteNavigationEngine.resolveSiteSearchUrl(
+            query = query,
+            navData = state.siteNavigation,
+            currentUrl = state.activeTab?.url.orEmpty()
+        )
+        if (targetUrl.isNotBlank()) {
+            openUrlOrSearch(targetUrl)
+        }
+    }
+
+    fun setReplaceSiteNavBar(enabled: Boolean) {
+        feedback.onSegmentSwitch()
+        _webCommand.value = WebCommand.SetReplaceSiteNavBar(enabled)
+        viewModelScope.launch {
+            repository.setReplaceSiteNavBar(enabled)
+            showToast(
+                if (enabled) "Custom Site Navigation Bar active"
+                else "Original website header restored"
+            )
+        }
+    }
+
     fun copyUrlToClipboard(context: Context, url: String) {
         if (url.isBlank()) return
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -796,16 +954,19 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val current = uiState.value.activeTab ?: return@launch
             repository.updateTabNavigation(current.id, "", "Start Page")
-            transientState.update {
-                it.copy(
+            transientState.update { st ->
+                st.copy(
                     canWebGoBack = false,
                     canWebGoForward = false,
                     isLoadingWebPage = false,
                     isVideoPlaying = false,
+                    isFullscreenVideo = false,
+                    isSiteBookmarksSheetOpen = false,
                     isFindInPageOpen = false,
                     isWebToolsSheetOpen = false,
                     isReaderMode = false,
-                    webLoadProgress = 0f
+                    webLoadProgress = 0f,
+                    siteNavByTab = st.siteNavByTab - current.id
                 )
             }
         }
@@ -818,9 +979,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 isAddressOverlayOpen = false,
                 isSettingsSheetOpen = false,
                 isWebToolsSheetOpen = false,
+                isSiteBookmarksSheetOpen = false,
                 isSiriOpen = false,
                 isFindInPageOpen = false,
                 isVideoPlaying = false,
+                isFullscreenVideo = false,
                 activeSection = TopHubSection.START_PAGE
             )
         }
@@ -835,6 +998,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val state = uiState.value
         when {
             state.isSiriOpen -> closeSiriOverlay()
+            state.isSiteBookmarksSheetOpen -> setSiteBookmarksSheetOpen(false)
             state.isWebToolsSheetOpen -> setWebToolsSheetOpen(false)
             state.isFindInPageOpen -> closeFindInPage()
             state.isAddressOverlayOpen -> closeAddressOverlay()
@@ -869,12 +1033,24 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun onWebPageStarted(tabId: Long, url: String) {
-        transientState.update {
-            it.copy(
+        val placeholderNav = SiteNavigationEngine.buildInitialPlaceholderForUrl(url)
+        transientState.update { st ->
+            val currentCached = st.siteNavByTab[tabId]
+            val sameDomain = currentCached != null &&
+                BrowserRepository.extractDomain(currentCached.homeUrl)
+                    .equals(BrowserRepository.extractDomain(url), ignoreCase = true)
+            val nextMap = if (sameDomain) {
+                st.siteNavByTab
+            } else {
+                st.siteNavByTab + (tabId to placeholderNav)
+            }
+            st.copy(
                 isLoadingWebPage = true,
                 isVideoPlaying = false,
+                isFullscreenVideo = false,
                 isReaderMode = false,
-                webLoadProgress = 0.12f
+                webLoadProgress = 0.12f,
+                siteNavByTab = nextMap
             )
         }
         viewModelScope.launch {
@@ -888,6 +1064,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             transientState.update { current ->
                 if (current.isVideoPlaying == isPlaying) current
                 else current.copy(isVideoPlaying = isPlaying)
+            }
+        }
+    }
+
+    fun onWebFullscreenVideoChanged(tabId: Long, isFullscreen: Boolean) {
+        val activeId = uiState.value.activeTab?.id
+        if (activeId == null || tabId == activeId || !isFullscreen) {
+            transientState.update { current ->
+                if (current.isFullscreenVideo == isFullscreen) current
+                else current.copy(isFullscreenVideo = isFullscreen)
             }
         }
     }
@@ -1025,6 +1211,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             val remaining = state.allTabs.filter { it.id != tab.id && it.isPrivate == tab.isPrivate }
             tabSnapshots.remove(tab.id)
             snapshotLruOrder.remove(tab.id)
+            transientState.update { st -> st.copy(siteNavByTab = st.siteNavByTab - tab.id) }
             repository.closeTab(tab.id)
             if (remaining.isEmpty()) {
                 repository.createNewTab(isPrivate = tab.isPrivate, initialUrl = "")
@@ -1039,7 +1226,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val isPrivate = uiState.value.settings.isPrivateMode
             repository.closeAllTabs(isPrivate)
-            transientState.update { it.copy(activeTabGroupFilter = null) }
+            transientState.update {
+                it.copy(
+                    activeTabGroupFilter = null,
+                    siteNavByTab = emptyMap()
+                )
+            }
             showToast("Cleared open tabs")
         }
     }

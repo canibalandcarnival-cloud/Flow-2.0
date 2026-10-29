@@ -8,10 +8,13 @@ import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
+import com.google.firebase.appcheck.FirebaseAppCheck
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
@@ -142,17 +145,32 @@ class BrowserAiService {
                     }
                     text(fullPrompt)
                 }
-                conversationalModel.generateContentStream(requestContent).collect { chunk ->
-                    val piece = chunk.text.orEmpty()
-                    if (piece.isNotEmpty()) {
-                        accumulated.append(piece)
-                        emit(
-                            SiriAiUiState.Streaming(
-                                activePrompt = userPrompt,
-                                partialText = stripOpenUrlDirective(accumulated.toString()),
-                                isVision = isVision
+                suspend fun collectStream() {
+                    conversationalModel.generateContentStream(requestContent).collect { chunk ->
+                        val piece = chunk.text.orEmpty()
+                        if (piece.isNotEmpty()) {
+                            accumulated.append(piece)
+                            emit(
+                                SiriAiUiState.Streaming(
+                                    activePrompt = userPrompt,
+                                    partialText = stripOpenUrlDirective(accumulated.toString()),
+                                    isVision = isVision
+                                )
                             )
-                        )
+                        }
+                    }
+                }
+
+                try {
+                    collectStream()
+                } catch (firstErr: Exception) {
+                    if (firstErr is CancellationException) throw firstErr
+                    if (accumulated.isEmpty() && isAppCheckTokenError(firstErr)) {
+                        Log.w(TAG, "Refreshing App Check token and retrying stream once", firstErr)
+                        forceRefreshAppCheckToken()
+                        collectStream()
+                    } else {
+                        throw firstErr
                     }
                 }
             }
@@ -223,7 +241,18 @@ class BrowserAiService {
             }
 
             val response = withTimeout(60_000L) {
-                structuredDigestModel.generateContent(promptText)
+                try {
+                    structuredDigestModel.generateContent(promptText)
+                } catch (firstErr: Exception) {
+                    if (firstErr is CancellationException) throw firstErr
+                    if (isAppCheckTokenError(firstErr)) {
+                        Log.w(TAG, "Refreshing App Check token and retrying digest once", firstErr)
+                        forceRefreshAppCheckToken()
+                        structuredDigestModel.generateContent(promptText)
+                    } else {
+                        throw firstErr
+                    }
+                }
             }
             val jsonString = response.text
                 ?: return SiriAiUiState.Error("Model returned an empty digest response.")
@@ -311,6 +340,36 @@ class BrowserAiService {
         val w = (bitmap.width * ratio).toInt().coerceAtLeast(64)
         val h = (bitmap.height * ratio).toInt().coerceAtLeast(64)
         return Bitmap.createScaledBitmap(bitmap, w, h, true)
+    }
+
+    private suspend fun forceRefreshAppCheckToken() {
+        try {
+            val task = FirebaseAppCheck.getInstance().getAppCheckToken(true)
+            suspendCancellableCoroutine<Unit> { cont ->
+                task.addOnCompleteListener {
+                    if (cont.isActive) {
+                        cont.resume(Unit)
+                    }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "App Check force refresh completed with warning", e)
+        }
+    }
+
+    private fun isAppCheckTokenError(error: Throwable): Boolean {
+        val combined = buildString {
+            append(error.message.orEmpty())
+            append(' ')
+            append(error.localizedMessage.orEmpty())
+            append(' ')
+            append(error.cause?.message.orEmpty())
+        }
+        return combined.contains("app check", ignoreCase = true) ||
+            combined.contains("appcheck", ignoreCase = true) ||
+            combined.contains("attestation", ignoreCase = true)
     }
 
     companion object {

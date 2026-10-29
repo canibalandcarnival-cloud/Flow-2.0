@@ -213,6 +213,46 @@ fun AddressSearchOverlay(
                 )
             }
 
+            // Quick Site Showcase Pills (instant access to YouTube & per-site custom navigation bars)
+            val quickDestinations = remember {
+                listOf(
+                    "YouTube" to "https://m.youtube.com",
+                    "Wikipedia" to "https://en.m.wikipedia.org",
+                    "GitHub" to "https://github.com",
+                    "Pinterest" to "https://www.pinterest.com",
+                    "Dezeen" to "https://www.dezeen.com",
+                    "Hacker News" to "https://news.ycombinator.com",
+                    "Google" to "https://www.google.com"
+                )
+            }
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = 2.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(quickDestinations, key = { it.first }) { (label, destUrl) ->
+                    FrostedGlassBox(
+                        shape = RoundedCornerShape(50),
+                        elevation = GlassElevation.CARD,
+                        useLiveSceneBackdrop = true,
+                        modifier = Modifier
+                            .height(38.dp)
+                            .bouncyClickable(
+                                pressedScale = 0.92f,
+                                contentDescriptionText = "Open $label",
+                                onClick = { onSubmitUrlOrSearch(destUrl) }
+                            )
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = style.contentPrimary,
+                            modifier = Modifier.padding(horizontal = 14.dp)
+                        )
+                    }
+                }
+            }
+
             // Frosted Omnibox Input Bar
             FrostedGlassBox(
                 shape = RoundedCornerShape(28.dp),
@@ -398,6 +438,7 @@ fun WallpaperAndSettingsSheet(
     onRequestHomeOsRole: () -> Unit,
     onRequestBrowserRole: () -> Unit,
     onToggleImmersiveOsMode: (Boolean) -> Unit,
+    onToggleReplaceSiteNavBar: (Boolean) -> Unit = {},
     onToggleHighRefresh: (Boolean) -> Unit,
     onToggleForceGpu: (Boolean) -> Unit,
     onToggleGpuRasterization: (Boolean) -> Unit,
@@ -811,6 +852,13 @@ fun WallpaperAndSettingsSheet(
                             checked = uiState.settings.immersiveOsMode,
                             onCheckedChange = onToggleImmersiveOsMode,
                             tag = "toggle_immersive_os_mode"
+                        )
+                        MonochromeToggleRow(
+                            title = stringResource(R.string.site_nav_replace_title),
+                            subtitle = stringResource(R.string.site_nav_replace_subtitle),
+                            checked = uiState.settings.replaceSiteNavBar,
+                            onCheckedChange = onToggleReplaceSiteNavBar,
+                            tag = "toggle_settings_replace_site_nav"
                         )
                     }
                 }
