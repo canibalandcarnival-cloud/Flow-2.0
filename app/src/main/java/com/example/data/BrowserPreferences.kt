@@ -17,7 +17,7 @@ private val Context.browserDataStore: DataStore<Preferences> by preferencesDataS
 
 data class BrowserSettingsState(
     val isDarkMode: Boolean = true,
-    val selectedWallpaperId: String = "preset:forest",
+    val selectedWallpaperId: String = "preset:savanna",
     val sfxEnabled: Boolean = true,
     val hapticsEnabled: Boolean = true,
     val highRefreshRateEnabled: Boolean = true,
@@ -45,12 +45,13 @@ class BrowserPreferences(private val context: Context) {
         val REPLACE_SITE_NAV_BAR = booleanPreferencesKey("replace_site_nav_bar")
         val ACTIVE_TAB_ID = longPreferencesKey("active_tab_id")
         val IS_PRIVATE_MODE = booleanPreferencesKey("is_private_mode")
+        val WALLPAPER_SAVANNA_MIGRATED_V2 = booleanPreferencesKey("wallpaper_savanna_migrated_v2")
     }
 
     val settingsFlow: Flow<BrowserSettingsState> = context.browserDataStore.data.map { prefs ->
         BrowserSettingsState(
             isDarkMode = prefs[Keys.IS_DARK_MODE] ?: true,
-            selectedWallpaperId = prefs[Keys.SELECTED_WALLPAPER_ID] ?: "preset:forest",
+            selectedWallpaperId = prefs[Keys.SELECTED_WALLPAPER_ID] ?: "preset:savanna",
             sfxEnabled = prefs[Keys.SFX_ENABLED] ?: true,
             hapticsEnabled = prefs[Keys.HAPTICS_ENABLED] ?: true,
             highRefreshRateEnabled = prefs[Keys.HIGH_REFRESH_ENABLED] ?: true,
@@ -70,6 +71,19 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setSelectedWallpaper(wallpaperId: String) {
         context.browserDataStore.edit { it[Keys.SELECTED_WALLPAPER_ID] = wallpaperId }
+    }
+
+    suspend fun migrateDefaultSavannaWallpaperV2() {
+        context.browserDataStore.edit { prefs ->
+            val alreadyMigrated = prefs[Keys.WALLPAPER_SAVANNA_MIGRATED_V2] ?: false
+            if (!alreadyMigrated) {
+                val current = prefs[Keys.SELECTED_WALLPAPER_ID]
+                if (current == null || current == "preset:forest") {
+                    prefs[Keys.SELECTED_WALLPAPER_ID] = "preset:savanna"
+                }
+                prefs[Keys.WALLPAPER_SAVANNA_MIGRATED_V2] = true
+            }
+        }
     }
 
     suspend fun setSfxEnabled(enabled: Boolean) {

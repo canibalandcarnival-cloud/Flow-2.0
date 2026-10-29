@@ -120,9 +120,7 @@ fun WebBrowserView(
         contentLength: Long
     ) -> Unit = { _, _, _, _, _ -> },
     onSaveBlobDownload: (dataUrl: String, fileName: String?, mimeType: String?) -> Unit = { _, _, _ -> },
-    onOpenUrlInNewTab: (String) -> Unit = {},
-    onAskSiriAboutUrl: (String) -> Unit = {},
-    onCopyUrl: (String) -> Unit = {},
+    onLinkContextTargetChanged: (WebHitContextTarget?) -> Unit = {},
     onEdgeBounce: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -146,9 +144,8 @@ fun WebBrowserView(
     val isFullscreenVideo = customVideoView != null
     val effectiveVideoPlaying = isInlineVideoPlaying || isFullscreenVideo
 
-    // Enhanced WebView UI states: File chooser, JS Dialogs, Long-press context menu
+    // Enhanced WebView UI states: File chooser, JS Dialogs
     var pendingFileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
-    var hitContextTarget by remember(tabId) { mutableStateOf<WebHitContextTarget?>(null) }
     var activeJsDialog by remember(tabId) { mutableStateOf<WebJsDialogRequest?>(null) }
     var pendingJsCancel by remember { mutableStateOf<(() -> Unit)?>(null) }
 
@@ -178,7 +175,12 @@ fun WebBrowserView(
     val onSiteNavigationJsonLatest by rememberUpdatedState(onSiteNavigationJsonReceived)
     val onDownloadLatest by rememberUpdatedState(onDownloadRequested)
     val onBlobDownloadLatest by rememberUpdatedState(onSaveBlobDownload)
+    val onLinkContextLatest by rememberUpdatedState(onLinkContextTargetChanged)
     val onBounceLatest by rememberUpdatedState(onEdgeBounce)
+
+    LaunchedEffect(tabId) {
+        onLinkContextLatest(null)
+    }
 
     LaunchedEffect(currentTabId, effectiveVideoPlaying) {
         onVideoPlaybackLatest(currentTabId, effectiveVideoPlaying)
@@ -188,15 +190,12 @@ fun WebBrowserView(
         onFullscreenVideoLatest(currentTabId, isFullscreenVideo)
     }
 
-    BackHandler(enabled = customVideoView != null || hitContextTarget != null || activeJsDialog != null) {
+    BackHandler(enabled = customVideoView != null || activeJsDialog != null) {
         when {
             activeJsDialog != null -> {
                 pendingJsCancel?.invoke()
                 pendingJsCancel = null
                 activeJsDialog = null
-            }
-            hitContextTarget != null -> {
-                hitContextTarget = null
             }
             customVideoView != null -> {
                 try {
@@ -489,18 +488,22 @@ fun WebBrowserView(
                         val extra = hit.extra?.takeIf { it.isNotBlank() } ?: return@setOnLongClickListener false
                         when (hit.type) {
                             WebView.HitTestResult.SRC_ANCHOR_TYPE -> {
-                                hitContextTarget = WebHitContextTarget(
-                                    targetUrl = extra,
-                                    isImage = false
+                                onLinkContextLatest(
+                                    WebHitContextTarget(
+                                        targetUrl = extra,
+                                        isImage = false
+                                    )
                                 )
                                 true
                             }
                             WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE,
                             WebView.HitTestResult.IMAGE_TYPE -> {
-                                hitContextTarget = WebHitContextTarget(
-                                    targetUrl = extra,
-                                    imageUrl = extra,
-                                    isImage = true
+                                onLinkContextLatest(
+                                    WebHitContextTarget(
+                                        targetUrl = extra,
+                                        imageUrl = extra,
+                                        isImage = true
+                                    )
                                 )
                                 true
                             }
@@ -611,6 +614,7 @@ fun WebBrowserView(
                         override fun onPageStarted(view: WebView?, startedUrl: String?, favicon: Bitmap?) {
                             super.onPageStarted(view, startedUrl, favicon)
                             isInlineVideoPlaying = false
+                            onLinkContextLatest(null)
                             if (!startedUrl.isNullOrBlank()) {
                                 onStartedLatest(currentTabId, startedUrl)
                             }
@@ -813,20 +817,6 @@ fun WebBrowserView(
                 }
             }
         )
-
-        // Long-press link / image frosted context menu sheet
-        hitContextTarget?.let { target ->
-            WebContextMenuGlassSheet(
-                target = target,
-                onOpenInNewTab = onOpenUrlInNewTab,
-                onDownloadUrl = { dlUrl ->
-                    onDownloadLatest(dlUrl, null, null, null, -1L)
-                },
-                onAskSiriAboutUrl = onAskSiriAboutUrl,
-                onCopyUrl = onCopyUrl,
-                onDismiss = { hitContextTarget = null }
-            )
-        }
 
         // Frosted-glass JS alert / confirm / prompt modal
         activeJsDialog?.let { jsReq ->

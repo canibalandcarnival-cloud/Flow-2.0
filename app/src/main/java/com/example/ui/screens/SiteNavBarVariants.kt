@@ -55,7 +55,6 @@ import com.example.ui.components.SafariPageMenuIcon
 import com.example.ui.components.SafariReloadIcon
 import com.example.ui.components.SafariShareIcon
 import com.example.ui.components.bouncyClickable
-import com.example.ui.components.draggableGlassSurface
 import com.example.ui.components.rememberPhysicalMomentumFlingBehavior
 import com.example.ui.theme.LocalGlassStyle
 
@@ -96,7 +95,6 @@ internal fun YouTubeSafariIslandBar(
         modifier = Modifier
             .widthIn(max = barMaxWidth)
             .fillMaxWidth()
-            .draggableGlassSurface(maxHorizontalOffsetPx = 280f, maxVerticalOffsetPx = 560f)
             .testTag("site_custom_navigation_bar")
     ) {
         Column(
@@ -304,29 +302,54 @@ internal fun EditorialReaderDeckBar(
 ) {
     val style = LocalGlassStyle.current
     val shape = RoundedCornerShape(24.dp)
+    val hoverShape = RoundedCornerShape(50)
 
-    FrostedGlassBox(
-        shape = shape,
-        elevation = GlassElevation.FLOATING_BAR,
-        useLiveSceneBackdrop = true,
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .widthIn(max = barMaxWidth)
             .fillMaxWidth()
-            .draggableGlassSurface(maxHorizontalOffsetPx = 280f, maxVerticalOffsetPx = 560f)
-            .testTag("site_custom_navigation_bar")
     ) {
-        Column(
+        if (navData.items.isNotEmpty()) {
+            FrostedGlassBox(
+                shape = hoverShape,
+                elevation = GlassElevation.FLOATING_BAR,
+                useLiveSceneBackdrop = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("site_hovering_links_bar")
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(0.9.dp, Color(0xFFD8B88A).copy(alpha = 0.34f), hoverShape)
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    SiteExtractedLinksStrip(
+                        navData = navData,
+                        listState = listState,
+                        onHomeClick = onHomeClick,
+                        onNavItemClick = onNavItemClick
+                    )
+                }
+            }
+        }
+
+        FrostedGlassBox(
+            shape = shape,
+            elevation = GlassElevation.FLOATING_BAR,
+            useLiveSceneBackdrop = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .border(0.9.dp, Color(0xFFD8B88A).copy(alpha = 0.34f), shape)
-                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .testTag("site_custom_navigation_bar")
         ) {
-            SiteExtractedLinksStrip(
-                navData = navData,
-                listState = listState,
-                onHomeClick = onHomeClick,
-                onNavItemClick = onNavItemClick
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(0.9.dp, Color(0xFFD8B88A).copy(alpha = 0.34f), shape)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            ) {
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -456,6 +479,7 @@ internal fun EditorialReaderDeckBar(
                         .background(Color(0xFFD99B4E))
                 )
             }
+            }
         }
     }
 }
@@ -485,34 +509,61 @@ internal fun DevCommandHudBar(
     onTabsClick: () -> Unit
 ) {
     val hudShape = RoundedCornerShape(18.dp)
+    val hoverShape = RoundedCornerShape(50)
     val cyanAccent = Color(0xFF5AC8FA)
 
-    FrostedGlassBox(
-        shape = hudShape,
-        elevation = GlassElevation.FLOATING_BAR,
-        useLiveSceneBackdrop = true,
-        customTintAlpha = 0.22f,
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .widthIn(max = barMaxWidth)
             .fillMaxWidth()
-            .draggableGlassSurface(maxHorizontalOffsetPx = 280f, maxVerticalOffsetPx = 560f)
-            .testTag("site_custom_navigation_bar")
     ) {
-        Column(
+        if (navData.items.isNotEmpty()) {
+            FrostedGlassBox(
+                shape = hoverShape,
+                elevation = GlassElevation.FLOATING_BAR,
+                useLiveSceneBackdrop = true,
+                customTintAlpha = 0.22f,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("site_hovering_links_bar")
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF141820).copy(alpha = 0.88f))
+                        .border(1.dp, cyanAccent.copy(alpha = 0.35f), hoverShape)
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    SiteExtractedLinksStrip(
+                        navData = navData,
+                        listState = listState,
+                        forceLightContent = true,
+                        accentColor = cyanAccent,
+                        onHomeClick = onHomeClick,
+                        onNavItemClick = onNavItemClick
+                    )
+                }
+            }
+        }
+
+        FrostedGlassBox(
+            shape = hudShape,
+            elevation = GlassElevation.FLOATING_BAR,
+            useLiveSceneBackdrop = true,
+            customTintAlpha = 0.22f,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(0xFF141820).copy(alpha = 0.88f))
-                .border(1.dp, cyanAccent.copy(alpha = 0.35f), hudShape)
-                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .testTag("site_custom_navigation_bar")
         ) {
-            SiteExtractedLinksStrip(
-                navData = navData,
-                listState = listState,
-                forceLightContent = true,
-                accentColor = cyanAccent,
-                onHomeClick = onHomeClick,
-                onNavItemClick = onNavItemClick
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF141820).copy(alpha = 0.88f))
+                    .border(1.dp, cyanAccent.copy(alpha = 0.35f), hudShape)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            ) {
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -614,6 +665,7 @@ internal fun DevCommandHudBar(
                         .background(cyanAccent)
                 )
             }
+            }
         }
     }
 }
@@ -646,7 +698,6 @@ internal fun SocialFloatingOrbsBar(
         modifier = Modifier
             .widthIn(max = barMaxWidth)
             .fillMaxWidth()
-            .draggableGlassSurface(maxHorizontalOffsetPx = 280f, maxVerticalOffsetPx = 560f)
             .testTag("site_custom_navigation_bar")
     ) {
         // Left Detached Orb: Back
@@ -830,30 +881,52 @@ internal fun UniversalLiquidCapsuleBar(
 ) {
     val style = LocalGlassStyle.current
     val shape = RoundedCornerShape(28.dp)
+    val hoverShape = RoundedCornerShape(50)
 
-    FrostedGlassBox(
-        shape = shape,
-        elevation = GlassElevation.FLOATING_BAR,
-        useLiveSceneBackdrop = true,
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .widthIn(max = barMaxWidth)
             .fillMaxWidth()
-            .draggableGlassSurface(maxHorizontalOffsetPx = 280f, maxVerticalOffsetPx = 560f)
-            .testTag("site_custom_navigation_bar")
     ) {
-        Column(
+        if (navData.items.isNotEmpty()) {
+            FrostedGlassBox(
+                shape = hoverShape,
+                elevation = GlassElevation.FLOATING_BAR,
+                useLiveSceneBackdrop = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("site_hovering_links_bar")
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    SiteExtractedLinksStrip(
+                        navData = navData,
+                        listState = listState,
+                        onHomeClick = onHomeClick,
+                        onNavItemClick = onNavItemClick
+                    )
+                }
+            }
+        }
+
+        FrostedGlassBox(
+            shape = shape,
+            elevation = GlassElevation.FLOATING_BAR,
+            useLiveSceneBackdrop = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .testTag("site_custom_navigation_bar")
         ) {
-            if (navData.items.isNotEmpty()) {
-                SiteExtractedLinksStrip(
-                    navData = navData,
-                    listState = listState,
-                    onHomeClick = onHomeClick,
-                    onNavItemClick = onNavItemClick
-                )
-            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            ) {
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -983,6 +1056,7 @@ internal fun UniversalLiquidCapsuleBar(
                         .height(2.dp)
                         .background(style.contentPrimary)
                 )
+            }
             }
         }
     }

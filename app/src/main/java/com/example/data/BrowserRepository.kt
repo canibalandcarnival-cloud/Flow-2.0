@@ -19,6 +19,7 @@ class BrowserRepository(
     val settings: Flow<BrowserSettingsState> = preferences.settingsFlow
 
     suspend fun ensureSeeded(): Long {
+        preferences.migrateDefaultSavannaWallpaperV2()
         if (dao.countFavorites() == 0) {
             dao.insertFavorites(
                 listOf(
@@ -426,7 +427,7 @@ class BrowserRepository(
         } catch (_: Throwable) {}
         dao.deleteCustomWallpaperById(entity.id)
         if (currentSelectedId == "custom:${entity.id}") {
-            preferences.setSelectedWallpaper("preset:forest")
+            preferences.setSelectedWallpaper("preset:savanna")
         }
     }
 
@@ -449,6 +450,88 @@ class BrowserRepository(
     suspend fun getActiveDownloads(): List<DownloadItemEntity> = dao.getActiveDownloads()
     suspend fun deleteDownload(id: Long) = dao.deleteDownloadById(id)
     suspend fun clearCompletedDownloads() = dao.clearCompletedDownloads()
+
+    suspend fun mergeCloudBookmarks(items: List<CloudBookmark>): Int {
+        if (items.isEmpty()) return 0
+        val existingUrls = dao.observeBookmarks().first()
+            .map { it.url.trim().lowercase() }
+            .toHashSet()
+        val toInsert = items.mapNotNull { cloud ->
+            val cleanUrl = cloud.url.trim()
+            if (cleanUrl.isEmpty() || !existingUrls.add(cleanUrl.lowercase())) {
+                null
+            } else {
+                BookmarkEntity(
+                    title = cloud.title.trim().ifBlank { extractDomain(cleanUrl) },
+                    url = cleanUrl,
+                    folder = cloud.folder.trim().ifBlank { "Bookmarks" },
+                    createdAt = cloud.createdAt?.toDate()?.time ?: System.currentTimeMillis()
+                )
+            }
+        }
+        if (toInsert.isNotEmpty()) {
+            dao.insertBookmarks(toInsert)
+        }
+        return toInsert.size
+    }
+
+    suspend fun mergeCloudFavorites(items: List<CloudFavorite>): Int {
+        if (items.isEmpty()) return 0
+        val existingUrls = dao.observeFavorites().first()
+            .map { it.url.trim().lowercase() }
+            .toHashSet()
+        val toInsert = items.mapNotNull { cloud ->
+            val cleanUrl = cloud.url.trim()
+            if (cleanUrl.isEmpty() || !existingUrls.add(cleanUrl.lowercase())) {
+                null
+            } else {
+                val cleanTitle = cloud.title.trim().ifBlank { extractDomain(cleanUrl) }
+                val monogram = cleanTitle.take(2).uppercase().ifBlank { "W" }
+                FavoriteSiteEntity(
+                    title = cleanTitle,
+                    url = cleanUrl,
+                    iconType = "MONOGRAM",
+                    monogram = monogram,
+                    bgStyle = "PURE_BLACK",
+                    sortOrder = cloud.position.toInt().coerceIn(-10, 999)
+                )
+            }
+        }
+        if (toInsert.isNotEmpty()) {
+            dao.insertFavorites(toInsert)
+        }
+        return toInsert.size
+    }
+
+    suspend fun mergeCloudReadingList(items: List<CloudReadingItem>): Int {
+        if (items.isEmpty()) return 0
+        val existingUrls = dao.observeReadingList().first()
+            .map { it.url.trim().lowercase() }
+            .toHashSet()
+        val toInsert = items.mapNotNull { cloud ->
+            val cleanUrl = cloud.url.trim()
+            if (cleanUrl.isEmpty() || !existingUrls.add(cleanUrl.lowercase())) {
+                null
+            } else {
+                val domain = extractDomain(cleanUrl)
+                ReadingListItemEntity(
+                    title = cloud.title.trim().ifBlank { domain },
+                    excerpt = cloud.excerpt.trim().ifBlank {
+                        "Saved from $domain for distraction-free reading."
+                    },
+                    domain = domain,
+                    url = cleanUrl,
+                    artworkStyle = "GLASS_ARCH",
+                    isUnread = !cloud.isRead,
+                    addedAt = cloud.createdAt?.toDate()?.time ?: System.currentTimeMillis()
+                )
+            }
+        }
+        if (toInsert.isNotEmpty()) {
+            dao.insertReadingListItems(toInsert)
+        }
+        return toInsert.size
+    }
 
     companion object {
         fun normalizeUrlOrSearch(raw: String): String {

@@ -127,4 +127,14 @@
     <string name="site_bookmarks_save_current">Bookmark Page</string>
     <string name="site_bookmarks_save_reading">Save to Reading</string>
     <string name="site_bookmarks_open_all">All Bookmarks</string>
+
+    <!-- Google Account & Cloud Sync -->
+    <string name="account_section_title">Google Account &amp; Cloud Sync</string>
+    <string name="account_sync_subtitle">Sync bookmarks, favorites, reading list &amp; wallpaper across devices</string>
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="sync_now_label">Sync Now</string>
+    <string name="sign_out_label">Sign Out</string>
+    <string name="account_pill_sign_in">Sign In</string>
+    <string name="account_manage_label">Account</string>
+    <string name="cd_account_button">Google Account and cloud sync</string>
 </resources>

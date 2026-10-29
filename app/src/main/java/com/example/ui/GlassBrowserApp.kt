@@ -50,6 +50,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import androidx.credentials.CredentialManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -74,6 +76,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
 import com.example.core.DisplayRefreshRateManager
+import com.example.core.GoogleAuthManager
 import com.example.core.GpuRenderController
 import com.example.core.OsShellManager
 import com.example.core.SiriAiUiState
@@ -86,6 +89,7 @@ import com.example.ui.components.OverlappingTabsIcon
 import com.example.ui.components.SpatialBackdropState
 import com.example.ui.components.bouncyClickable
 import com.example.ui.components.configureBlurLayer
+import com.example.ui.screens.AccountAuthGlassSheet
 import com.example.ui.screens.AddressSearchOverlay
 import com.example.ui.screens.BottomBrowserGlassBar
 import com.example.ui.screens.BrowserHubContent
@@ -100,6 +104,7 @@ import com.example.ui.screens.TabSwitcherOverlay
 import com.example.ui.screens.TopSegmentedGlassBar
 import com.example.ui.screens.WallpaperAndSettingsSheet
 import com.example.ui.screens.WebBrowserView
+import com.example.ui.screens.WebContextMenuGlassSheet
 import com.example.ui.screens.WebToolsGlassSheet
 import com.example.ui.theme.GlassBrowserTheme
 import com.example.ui.theme.LocalGlassStyle
@@ -132,6 +137,16 @@ fun GlassBrowserApp(
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var siteBarMeasuredHeightPx by remember { mutableIntStateOf(0) }
     val glassMotionTracker = remember { GlassMotionTracker() }
+    val appScope = rememberCoroutineScope()
+
+    // Silent startup Google Auto Sign-In check (single-option GetGoogleIdOption)
+    LaunchedEffect(Unit) {
+        GoogleAuthManager.attemptAutoSignIn(
+            context = context,
+            credentialManager = CredentialManager.create(context),
+            scope = appScope
+        )
+    }
 
     // Refresh OS Role status (ROLE_HOME / ROLE_BROWSER) and re-apply immersive OS bars on resume
     DisposableEffect(lifecycleOwner, context, uiState.settings.immersiveOsMode) {
@@ -243,6 +258,8 @@ fun GlassBrowserApp(
     }
 
     val hasInternalBackTarget = isNewGroupDialogOpen ||
+        uiState.activeLinkContextTarget != null ||
+        uiState.isAccountSheetOpen ||
         uiState.isSiriOpen ||
         uiState.isSiteBookmarksSheetOpen ||
         uiState.isWebToolsSheetOpen ||
@@ -409,13 +426,7 @@ fun GlassBrowserApp(
                             onSiteNavigationJsonReceived = viewModel::onSiteNavigationJsonReceived,
                             onDownloadRequested = viewModel::startWebOrDirectDownload,
                             onSaveBlobDownload = viewModel::saveBlobBase64Download,
-                            onOpenUrlInNewTab = viewModel::openUrlInNewTab,
-                            onAskSiriAboutUrl = { targetUrl ->
-                                viewModel.submitSiriPrompt(
-                                    "Explain what this link or resource is in context of the page: $targetUrl"
-                                )
-                            },
-                            onCopyUrl = { linkUrl -> viewModel.copyUrlToClipboard(context, linkUrl) },
+                            onLinkContextTargetChanged = viewModel::setLinkContextTarget,
                             onEdgeBounce = viewModel.feedback::onEdgeBounce,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -452,7 +463,7 @@ fun GlassBrowserApp(
                                     )
                                 } else {
                                     Image(
-                                        painter = painterResource(id = R.drawable.wp_forest_canopy),
+                                        painter = painterResource(id = R.drawable.wp_savanna_canopy),
                                         contentDescription = null,
                                         colorFilter = null,
                                         contentScale = ContentScale.Crop,
@@ -469,6 +480,7 @@ fun GlassBrowserApp(
                                 onToggleShowAllFavorites = viewModel::toggleShowAllFavorites,
                                 onToggleShowAllReadingList = viewModel::toggleShowAllReadingList,
                                 onOpenCustomizeSheet = { viewModel.setSettingsSheetOpen(true) },
+                                onOpenAccountSheet = { viewModel.setAccountSheetOpen(true) },
                                 onDeleteReadingItem = viewModel::removeReadingListItem,
                                 onDeleteBookmark = viewModel::removeBookmark,
                                 onClearHistory = viewModel::clearBrowsingHistory,
@@ -560,6 +572,46 @@ fun GlassBrowserApp(
                         onWebToolsClick = { viewModel.setWebToolsSheetOpen(true) },
                         onTabsClick = viewModel::openTabSwitcher
                     )
+                }
+
+                // Floating Long-Press Link / Image Options Popover hovering directly ABOVE the navigation bar
+                var cachedLinkTarget by remember { mutableStateOf(uiState.activeLinkContextTarget) }
+                if (uiState.activeLinkContextTarget != null) {
+                    cachedLinkTarget = uiState.activeLinkContextTarget
+                }
+                AnimatedVisibility(
+                    visible = uiState.activeLinkContextTarget != null && !uiState.isTabSwitcherOpen,
+                    enter = fadeIn(spring(stiffness = 440f)) +
+                        slideInVertically(
+                            initialOffsetY = { it / 3 },
+                            animationSpec = spring(dampingRatio = 0.70f, stiffness = 380f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 500f)) +
+                        slideOutVertically(targetOffsetY = { it / 3 })
+                ) {
+                    cachedLinkTarget?.let { linkTarget ->
+                        WebContextMenuGlassSheet(
+                            target = linkTarget,
+                            bottomClearance = if (isSiteNavBarVisible) {
+                                measuredSiteBarDp + 8.dp
+                            } else {
+                                navBottomInset + 14.dp
+                            },
+                            onOpenInNewTab = viewModel::openUrlInNewTab,
+                            onDownloadUrl = { targetUrl ->
+                                viewModel.startWebOrDirectDownload(url = targetUrl)
+                            },
+                            onAskSiriAboutUrl = { targetUrl ->
+                                viewModel.submitSiriPrompt(
+                                    "Explain what this link or resource is in context of the page: $targetUrl"
+                                )
+                            },
+                            onCopyUrl = { linkUrl ->
+                                viewModel.copyUrlToClipboard(context, linkUrl)
+                            },
+                            onDismiss = { viewModel.setLinkContextTarget(null) }
+                        )
+                    }
                 }
 
                 // Minimal corner controls pill if the user manually turns off Custom Site Navigation Bar
@@ -896,8 +948,36 @@ fun GlassBrowserApp(
                         onToggleSfx = viewModel::setSfxEnabled,
                         onToggleHaptics = viewModel::setHapticsEnabled,
                         onCloseAllTabs = viewModel::closeAllCurrentModeTabs,
+                        onOpenAccountSheet = {
+                            viewModel.setAccountSheetOpen(true)
+                        },
                         onEdgeBounce = viewModel.feedback::onEdgeBounce,
                         onDismiss = { viewModel.setSettingsSheetOpen(false) }
+                    )
+                }
+
+                // Google Account Login & Cloud Sync Frosted Sheet
+                AnimatedVisibility(
+                    visible = uiState.isAccountSheetOpen,
+                    enter = fadeIn(spring(stiffness = 420f)) +
+                        slideInVertically(
+                            initialOffsetY = { it / 2 },
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 360f)
+                        ),
+                    exit = fadeOut(spring(stiffness = 480f)) +
+                        slideOutVertically(targetOffsetY = { it / 2 })
+                ) {
+                    AccountAuthGlassSheet(
+                        signedInAccount = uiState.signedInAccount,
+                        isSyncingCloud = uiState.isSyncingCloud,
+                        cloudSyncStatus = uiState.cloudSyncStatus,
+                        bookmarksCount = uiState.bookmarks.size,
+                        favoritesCount = uiState.favorites.size,
+                        readingListCount = uiState.readingList.size,
+                        onAuthSucceeded = viewModel::syncAccountWithCloudNow,
+                        onSyncNow = viewModel::syncAccountWithCloudNow,
+                        onSignedOut = viewModel::onSignedOut,
+                        onDismiss = { viewModel.setAccountSheetOpen(false) }
                     )
                 }
 

@@ -445,4 +445,76 @@ class ExampleRobolectricTest {
         assertEquals(sfPro, typography.labelLarge.fontFamily)
         assertEquals(sfPro, typography.labelMedium.fontFamily)
     }
+
+    @Test
+    fun `savanna canopy default wallpaper 12 presets hovering link options and account sheet transitions`() =
+        kotlinx.coroutines.runBlocking {
+            val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+
+            // 1. Default Start Page wallpaper is Savanna Canopy ("preset:savanna") and all 12 presets decode cleanly
+            assertEquals("preset:savanna", com.example.data.BrowserSettingsState().selectedWallpaperId)
+            assertEquals(12, WallpaperLuminanceAnalyzer.presets.size)
+            assertEquals("preset:savanna", WallpaperLuminanceAnalyzer.presets.first().id)
+            assertEquals("Savanna Canopy", WallpaperLuminanceAnalyzer.presets.first().title)
+
+            for (preset in WallpaperLuminanceAnalyzer.presets) {
+                val analyzed = WallpaperLuminanceAnalyzer.loadAndAnalyze(
+                    context = app,
+                    wallpaperId = preset.id,
+                    customFilePath = null
+                )
+                assertNotNull("Preset ${preset.id} must decode non-null wallpaper", analyzed)
+            }
+
+            // 2. Verify ViewModel link options hover state & Google Account sheet state transitions
+            val vm = com.example.ui.BrowserViewModel(app)
+            val collectJob = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+                vm.uiState.collect {}
+            }
+            try {
+                var attempts = 0
+                while (!vm.uiState.value.isReady && attempts < 50) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(40)
+                    attempts++
+                }
+
+                assertEquals("preset:savanna", vm.uiState.value.settings.selectedWallpaperId)
+
+                val sampleLinkTarget = com.example.ui.screens.WebHitContextTarget(
+                    targetUrl = "https://www.dezeen.com/architecture",
+                    imageUrl = null,
+                    isImage = false
+                )
+                vm.setLinkContextTarget(sampleLinkTarget)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(25)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertEquals(sampleLinkTarget, vm.uiState.value.activeLinkContextTarget)
+
+                // Back button dismisses hovering link options sheet first
+                vm.onBackButtonClicked()
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(25)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertEquals(null, vm.uiState.value.activeLinkContextTarget)
+
+                // Account login sheet opens and closes via Back button
+                vm.setAccountSheetOpen(true)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(25)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertTrue(vm.uiState.value.isAccountSheetOpen)
+
+                vm.onBackButtonClicked()
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(25)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertFalse(vm.uiState.value.isAccountSheetOpen)
+            } finally {
+                collectJob.cancel()
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            }
+        }
 }
+

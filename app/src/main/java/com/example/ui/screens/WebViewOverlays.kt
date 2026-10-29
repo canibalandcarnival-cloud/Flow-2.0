@@ -70,13 +70,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.core.DeviceOptimizationManager
 import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
 import com.example.ui.components.bouncyClickable
-import com.example.ui.components.draggableGlassSurface
 import com.example.ui.components.rememberPhysicalMomentumFlingBehavior
 import com.example.ui.components.rubberBandOverscroll
 import com.example.ui.theme.LocalGlassStyle
@@ -137,7 +137,6 @@ fun FindInPageGlassBar(
                 .widthIn(max = metrics.chromeBarMaxWidth)
                 .fillMaxWidth()
                 .height(52.dp)
-                .draggableGlassSurface(maxHorizontalOffsetPx = 380f, maxVerticalOffsetPx = 900f)
                 .testTag("find_in_page_bar")
         ) {
             Row(
@@ -703,11 +702,13 @@ private fun WebToggleRow(
 }
 
 /**
- * Long-Press Link / Image Context Sheet on WebView (`HitTestResult`).
+ * Floating Long-Press Link / Image Options Popover (`HitTestResult`) that hovers directly
+ * above the bottom navigation bar in Plane 2.
  */
 @Composable
 fun WebContextMenuGlassSheet(
     target: WebHitContextTarget,
+    bottomClearance: Dp = 16.dp,
     onOpenInNewTab: (String) -> Unit,
     onDownloadUrl: (String) -> Unit,
     onAskSiriAboutUrl: (String) -> Unit,
@@ -719,7 +720,7 @@ fun WebContextMenuGlassSheet(
         contentAlignment = Alignment.BottomCenter,
         modifier = Modifier
             .fillMaxSize()
-            .background(style.glassBaseColor.copy(alpha = 0.30f))
+            .background(style.glassBaseColor.copy(alpha = 0.14f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -727,13 +728,14 @@ fun WebContextMenuGlassSheet(
             )
     ) {
         FrostedGlassBox(
-            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            shape = RoundedCornerShape(26.dp),
             elevation = GlassElevation.MODAL_OVERLAY,
             useLiveSceneBackdrop = true,
             modifier = Modifier
-                .widthIn(max = 520.dp)
+                .padding(start = 16.dp, end = 16.dp, bottom = bottomClearance)
+                .widthIn(max = 500.dp)
                 .fillMaxWidth()
-                .navigationBarsPadding()
+                .testTag("link_options_hover_sheet")
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,

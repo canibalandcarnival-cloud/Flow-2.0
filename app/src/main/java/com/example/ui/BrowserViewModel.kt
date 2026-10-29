@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -21,6 +22,7 @@ import com.example.core.DeviceOptimizationManager
 import com.example.core.DownloadEngine
 import com.example.core.FeedbackManager
 import com.example.core.ResolvedWallpaper
+import com.example.core.SignedInAccountSummary
 import com.example.core.SiriAiUiState
 import com.example.core.SiriChatTurn
 import com.example.core.SiteNavItem
@@ -28,6 +30,8 @@ import com.example.core.SiteNavigationBarData
 import com.example.core.SiteNavigationEngine
 import com.example.core.WallpaperLuminanceAnalyzer
 import com.example.core.WebPageAiContext
+import com.example.core.toAccountSummary
+import com.example.data.AccountSyncRepository
 import com.example.data.BookmarkEntity
 import com.example.data.BrowserDatabase
 import com.example.data.BrowserPreferences
@@ -39,13 +43,22 @@ import com.example.data.DownloadItemEntity
 import com.example.data.FavoriteSiteEntity
 import com.example.data.HistoryEntryEntity
 import com.example.data.ReadingListItemEntity
+import com.example.ui.screens.WebHitContextTarget
+import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.auth
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -101,6 +114,11 @@ data class BrowserUiState(
     val isVideoPlaying: Boolean = false,
     val isFullscreenVideo: Boolean = false,
     val isSiteBookmarksSheetOpen: Boolean = false,
+    val isAccountSheetOpen: Boolean = false,
+    val activeLinkContextTarget: WebHitContextTarget? = null,
+    val signedInAccount: SignedInAccountSummary? = null,
+    val isSyncingCloud: Boolean = false,
+    val cloudSyncStatus: String? = null,
     val webLoadProgress: Float = 0f,
     val canWebGoBack: Boolean = false,
     val canWebGoForward: Boolean = false,
@@ -142,6 +160,27 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val downloadEngine = DownloadEngine(application.applicationContext, repository, viewModelScope)
     private val aiService = BrowserAiService()
     private var activeAiJob: Job? = null
+    private var cloudListenersJob: Job? = null
+
+    private val firebaseAuth: FirebaseAuth by lazy {
+        val appContext = getApplication<Application>()
+        if (FirebaseApp.getApps(appContext).isEmpty()) {
+            FirebaseApp.initializeApp(appContext)
+        }
+        Firebase.auth
+    }
+
+    private val accountSyncRepository: AccountSyncRepository by lazy {
+        val appContext = getApplication<Application>()
+        if (FirebaseApp.getApps(appContext).isEmpty()) {
+            FirebaseApp.initializeApp(appContext)
+        }
+        AccountSyncRepository(context = appContext)
+    }
+
+    private val authStateListener = FirebaseAuth.AuthStateListener { auth ->
+        handleAuthUserChanged(auth.currentUser)
+    }
 
     // In-memory live webpage thumbnail snapshots keyed by tabId, bounded by device RAM tier
     val tabSnapshots = mutableStateMapOf<Long, ImageBitmap>()
@@ -200,6 +239,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val isVideoPlaying: Boolean = false,
         val isFullscreenVideo: Boolean = false,
         val isSiteBookmarksSheetOpen: Boolean = false,
+        val isAccountSheetOpen: Boolean = false,
+        val activeLinkContextTarget: WebHitContextTarget? = null,
+        val signedInAccount: SignedInAccountSummary? = null,
+        val isSyncingCloud: Boolean = false,
+        val cloudSyncStatus: String? = null,
         val webLoadProgress: Float = 0f,
         val canWebGoBack: Boolean = false,
         val canWebGoForward: Boolean = false,
@@ -307,6 +351,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             isVideoPlaying = transient.isVideoPlaying,
             isFullscreenVideo = transient.isFullscreenVideo,
             isSiteBookmarksSheetOpen = transient.isSiteBookmarksSheetOpen,
+            isAccountSheetOpen = transient.isAccountSheetOpen,
+            activeLinkContextTarget = transient.activeLinkContextTarget,
+            signedInAccount = transient.signedInAccount,
+            isSyncingCloud = transient.isSyncingCloud,
+            cloudSyncStatus = transient.cloudSyncStatus,
             webLoadProgress = transient.webLoadProgress,
             canWebGoBack = transient.canWebGoBack,
             canWebGoForward = transient.canWebGoForward,
@@ -351,6 +400,20 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         }
+        try {
+            firebaseAuth.addAuthStateListener(authStateListener)
+        } catch (e: Exception) {
+            Log.w("CloudSync", "FirebaseAuth listener registration skipped: ${e.message}")
+        }
+    }
+
+    override fun onCleared() {
+        cloudListenersJob?.cancel()
+        try {
+            firebaseAuth.removeAuthStateListener(authStateListener)
+        } catch (_: Exception) {
+        }
+        super.onCleared()
     }
 
     fun selectTopSection(section: TopHubSection) {
@@ -478,7 +541,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         transientState.update {
             it.copy(
                 isSettingsSheetOpen = open,
-                isWebToolsSheetOpen = false
+                isWebToolsSheetOpen = false,
+                isAccountSheetOpen = false,
+                activeLinkContextTarget = null
             )
         }
     }
@@ -489,8 +554,10 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 isWebToolsSheetOpen = open,
                 isSiteBookmarksSheetOpen = false,
+                isAccountSheetOpen = false,
                 isAddressOverlayOpen = false,
-                isSiriOpen = false
+                isSiriOpen = false,
+                activeLinkContextTarget = null
             )
         }
     }
@@ -501,10 +568,171 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 isSiteBookmarksSheetOpen = open,
                 isWebToolsSheetOpen = false,
+                isAccountSheetOpen = false,
                 isAddressOverlayOpen = false,
-                isSiriOpen = false
+                isSiriOpen = false,
+                activeLinkContextTarget = null
             )
         }
+    }
+
+    fun setAccountSheetOpen(open: Boolean) {
+        feedback.onGlassTap()
+        transientState.update {
+            it.copy(
+                isAccountSheetOpen = open,
+                isSettingsSheetOpen = if (open) false else it.isSettingsSheetOpen,
+                isWebToolsSheetOpen = if (open) false else it.isWebToolsSheetOpen,
+                isSiteBookmarksSheetOpen = if (open) false else it.isSiteBookmarksSheetOpen,
+                isAddressOverlayOpen = if (open) false else it.isAddressOverlayOpen,
+                isSiriOpen = if (open) false else it.isSiriOpen,
+                activeLinkContextTarget = null
+            )
+        }
+    }
+
+    fun setLinkContextTarget(target: WebHitContextTarget?) {
+        if (target != null) {
+            feedback.onGlassTap()
+        }
+        transientState.update {
+            it.copy(activeLinkContextTarget = target)
+        }
+    }
+
+    private fun handleAuthUserChanged(user: FirebaseUser?) {
+        cloudListenersJob?.cancel()
+        cloudListenersJob = null
+        if (user == null) {
+            transientState.update {
+                it.copy(
+                    signedInAccount = null,
+                    isSyncingCloud = false,
+                    cloudSyncStatus = null
+                )
+            }
+            return
+        }
+
+        val summary = user.toAccountSummary()
+        transientState.update {
+            it.copy(signedInAccount = summary)
+        }
+        syncAccountWithCloudNow()
+
+        val uid = user.uid
+        cloudListenersJob = viewModelScope.launch {
+            launch {
+                accountSyncRepository.observeBookmarks(uid)
+                    .catch { e -> Log.w("CloudSync", "Bookmarks stream error: ${e.message}", e) }
+                    .collect { remote -> repository.mergeCloudBookmarks(remote) }
+            }
+            launch {
+                accountSyncRepository.observeFavorites(uid)
+                    .catch { e -> Log.w("CloudSync", "Favorites stream error: ${e.message}", e) }
+                    .collect { remote -> repository.mergeCloudFavorites(remote) }
+            }
+            launch {
+                accountSyncRepository.observeReadingList(uid)
+                    .catch { e -> Log.w("CloudSync", "Reading list stream error: ${e.message}", e) }
+                    .collect { remote -> repository.mergeCloudReadingList(remote) }
+            }
+        }
+    }
+
+    fun syncAccountWithCloudNow() {
+        val user = try {
+            firebaseAuth.currentUser
+        } catch (_: Exception) {
+            null
+        } ?: return
+
+        transientState.update {
+            it.copy(
+                signedInAccount = user.toAccountSummary(),
+                isSyncingCloud = true,
+                cloudSyncStatus = "Syncing with Google Cloud…"
+            )
+        }
+
+        viewModelScope.launch {
+            try {
+                seededFlow.first { it }
+                val currentSettings = repository.settings.first()
+                val presetWallpaper = currentSettings.selectedWallpaperId
+                    .takeIf { !it.startsWith("custom:") }
+                accountSyncRepository.upsertUserProfile(
+                    user = user,
+                    selectedWallpaperId = presetWallpaper
+                )
+
+                val remoteBookmarks = accountSyncRepository.getBookmarks(user.uid)
+                val remoteFavorites = accountSyncRepository.getFavorites(user.uid)
+                val remoteReading = accountSyncRepository.getReadingList(user.uid)
+
+                repository.mergeCloudBookmarks(remoteBookmarks)
+                repository.mergeCloudFavorites(remoteFavorites)
+                repository.mergeCloudReadingList(remoteReading)
+
+                val localBookmarks = repository.bookmarks.first()
+                localBookmarks.forEach { bm ->
+                    accountSyncRepository.upsertBookmark(
+                        url = bm.url,
+                        title = bm.title,
+                        folder = bm.folder
+                    )
+                }
+
+                val localFavorites = repository.favorites.first()
+                localFavorites.forEachIndexed { index, fav ->
+                    accountSyncRepository.upsertFavorite(
+                        title = fav.title,
+                        url = fav.url,
+                        position = fav.sortOrder.coerceAtLeast(index)
+                    )
+                }
+
+                val localReading = repository.readingList.first()
+                localReading.forEach { item ->
+                    accountSyncRepository.upsertReadingItem(
+                        url = item.url,
+                        title = item.title,
+                        excerpt = item.excerpt,
+                        isRead = !item.isUnread
+                    )
+                }
+
+                transientState.update {
+                    it.copy(
+                        isSyncingCloud = false,
+                        cloudSyncStatus = "Synced with Google Cloud"
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("CloudSync", "Cloud sync error: ${e.message}", e)
+                transientState.update {
+                    it.copy(
+                        isSyncingCloud = false,
+                        cloudSyncStatus = "Cloud sync paused • Local cache active"
+                    )
+                }
+            }
+        }
+    }
+
+    fun onSignedOut() {
+        cloudListenersJob?.cancel()
+        cloudListenersJob = null
+        transientState.update {
+            it.copy(
+                signedInAccount = null,
+                isSyncingCloud = false,
+                cloudSyncStatus = null
+            )
+        }
+        showToast("Signed out of Google Account")
     }
 
     // =========================================================================
@@ -738,6 +966,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 isTabSwitcherOpen = false,
                 isWebToolsSheetOpen = false,
                 isSiteBookmarksSheetOpen = false,
+                isAccountSheetOpen = false,
+                activeLinkContextTarget = null,
                 isVideoPlaying = false,
                 isFullscreenVideo = false,
                 isReaderMode = false,
@@ -962,6 +1192,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     isVideoPlaying = false,
                     isFullscreenVideo = false,
                     isSiteBookmarksSheetOpen = false,
+                    isAccountSheetOpen = false,
+                    activeLinkContextTarget = null,
                     isFindInPageOpen = false,
                     isWebToolsSheetOpen = false,
                     isReaderMode = false,
@@ -980,6 +1212,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 isSettingsSheetOpen = false,
                 isWebToolsSheetOpen = false,
                 isSiteBookmarksSheetOpen = false,
+                isAccountSheetOpen = false,
+                activeLinkContextTarget = null,
                 isSiriOpen = false,
                 isFindInPageOpen = false,
                 isVideoPlaying = false,
@@ -997,6 +1231,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         feedback.onGlassTap()
         val state = uiState.value
         when {
+            state.activeLinkContextTarget != null -> setLinkContextTarget(null)
+            state.isAccountSheetOpen -> setAccountSheetOpen(false)
             state.isSiriOpen -> closeSiriOverlay()
             state.isSiteBookmarksSheetOpen -> setSiteBookmarksSheetOpen(false)
             state.isWebToolsSheetOpen -> setWebToolsSheetOpen(false)
@@ -1049,6 +1285,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 isVideoPlaying = false,
                 isFullscreenVideo = false,
                 isReaderMode = false,
+                activeLinkContextTarget = null,
                 webLoadProgress = 0.12f,
                 siteNavByTab = nextMap
             )
@@ -1293,7 +1530,19 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectWallpaper(wallpaperId: String) {
         feedback.onGlassTap()
-        viewModelScope.launch { repository.setSelectedWallpaper(wallpaperId) }
+        viewModelScope.launch {
+            repository.setSelectedWallpaper(wallpaperId)
+            val user = try { firebaseAuth.currentUser } catch (_: Exception) { null }
+            if (user != null && !wallpaperId.startsWith("custom:")) {
+                try {
+                    accountSyncRepository.upsertUserProfile(user, wallpaperId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("CloudSync", "Wallpaper cloud update skipped: ${e.message}")
+                }
+            }
+        }
     }
 
     fun importCustomWallpaper(uri: Uri) {
@@ -1377,6 +1626,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             repository.addFavorite(tab.title, tab.url)
             showToast("Added to Favorites")
+            val user = try { firebaseAuth.currentUser } catch (_: Exception) { null }
+            if (user != null) {
+                try {
+                    accountSyncRepository.upsertFavorite(title = tab.title, url = tab.url)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("CloudSync", "Favorite cloud sync skipped: ${e.message}")
+                }
+            }
         }
     }
 
@@ -1387,6 +1646,21 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             repository.addReadingListItem(tab.title, tab.url)
             showToast("Saved to Reading List")
+            val user = try { firebaseAuth.currentUser } catch (_: Exception) { null }
+            if (user != null) {
+                try {
+                    val domain = BrowserRepository.extractDomain(tab.url)
+                    accountSyncRepository.upsertReadingItem(
+                        url = tab.url,
+                        title = tab.title,
+                        excerpt = "Saved from $domain for distraction-free reading."
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("CloudSync", "Reading item cloud sync skipped: ${e.message}")
+                }
+            }
         }
     }
 
@@ -1397,6 +1671,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             repository.addBookmark(tab.title, tab.url)
             showToast("Bookmarked")
+            val user = try { firebaseAuth.currentUser } catch (_: Exception) { null }
+            if (user != null) {
+                try {
+                    accountSyncRepository.upsertBookmark(url = tab.url, title = tab.title)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("CloudSync", "Bookmark cloud sync skipped: ${e.message}")
+                }
+            }
         }
     }
 
@@ -1412,7 +1696,20 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun removeBookmark(id: Long) {
         feedback.onTabClosed()
-        viewModelScope.launch { repository.removeBookmark(id) }
+        val bookmarkUrl = uiState.value.bookmarks.firstOrNull { it.id == id }?.url
+        viewModelScope.launch {
+            repository.removeBookmark(id)
+            val user = try { firebaseAuth.currentUser } catch (_: Exception) { null }
+            if (user != null && !bookmarkUrl.isNullOrBlank()) {
+                try {
+                    accountSyncRepository.deleteBookmarkByUrl(bookmarkUrl)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("CloudSync", "Bookmark cloud delete skipped: ${e.message}")
+                }
+            }
+        }
     }
 
     fun clearBrowsingHistory() {

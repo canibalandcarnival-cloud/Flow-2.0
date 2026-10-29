@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -28,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -39,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -50,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.core.DeviceOptimizationManager
+import com.example.core.SignedInAccountSummary
 import com.example.data.BookmarkEntity
 import com.example.data.DownloadItemEntity
 import com.example.data.FavoriteSiteEntity
@@ -81,6 +85,7 @@ fun BrowserHubContent(
     onToggleShowAllFavorites: () -> Unit,
     onToggleShowAllReadingList: () -> Unit,
     onOpenCustomizeSheet: () -> Unit,
+    onOpenAccountSheet: () -> Unit = {},
     onDeleteReadingItem: (Long) -> Unit,
     onDeleteBookmark: (Long) -> Unit,
     onClearHistory: () -> Unit,
@@ -119,6 +124,7 @@ fun BrowserHubContent(
             TopHubSection.START_PAGE -> StartPageSectionList(
                 favorites = uiState.favorites,
                 readingList = uiState.readingList,
+                signedInAccount = uiState.signedInAccount,
                 showAllFavorites = uiState.showAllFavorites,
                 showAllReadingList = uiState.showAllReadingList,
                 favoriteLabelColor = onWallpaperForeground,
@@ -129,6 +135,7 @@ fun BrowserHubContent(
                 onToggleShowAllFavorites = onToggleShowAllFavorites,
                 onToggleShowAllReadingList = onToggleShowAllReadingList,
                 onOpenCustomizeSheet = onOpenCustomizeSheet,
+                onOpenAccountSheet = onOpenAccountSheet,
                 onEdgeBounce = onEdgeBounce
             )
             TopHubSection.BOOKMARKS -> BookmarksSectionList(
@@ -179,6 +186,7 @@ fun BrowserHubContent(
 private fun StartPageSectionList(
     favorites: List<FavoriteSiteEntity>,
     readingList: List<ReadingListItemEntity>,
+    signedInAccount: SignedInAccountSummary?,
     showAllFavorites: Boolean,
     showAllReadingList: Boolean,
     favoriteLabelColor: Color,
@@ -189,6 +197,7 @@ private fun StartPageSectionList(
     onToggleShowAllFavorites: () -> Unit,
     onToggleShowAllReadingList: () -> Unit,
     onOpenCustomizeSheet: () -> Unit,
+    onOpenAccountSheet: () -> Unit,
     onEdgeBounce: (Float) -> Unit
 ) {
     val style = LocalGlassStyle.current
@@ -220,6 +229,68 @@ private fun StartPageSectionList(
                 .testTag("start_page_scroll_list")
                 .rubberBandOverscroll(onEdgeHit = onEdgeBounce)
         ) {
+            // Top Frosted Account Login & Cloud Sync Pill
+            item(key = "account_header_bar") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    FrostedGlassBox(
+                        shape = RoundedCornerShape(50),
+                        elevation = GlassElevation.CARD,
+                        useLiveSceneBackdrop = false,
+                        modifier = Modifier
+                            .height(48.dp)
+                            .testTag("start_page_account_button")
+                            .bouncyClickable(
+                                pressedScale = 0.92f,
+                                contentDescriptionText = stringResource(R.string.cd_account_button),
+                                onClick = onOpenAccountSheet
+                            )
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(horizontal = 14.dp)
+                        ) {
+                            if (signedInAccount == null) {
+                                Icon(
+                                    imageVector = Icons.Outlined.AccountCircle,
+                                    contentDescription = null,
+                                    tint = style.contentPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = stringResource(R.string.account_pill_sign_in),
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    color = style.contentPrimary
+                                )
+                            } else {
+                                AccountAvatarBadge(
+                                    account = signedInAccount,
+                                    sizeDp = 28
+                                )
+                                Text(
+                                    text = signedInAccount.displayName,
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    color = style.contentPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 150.dp)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF4ADE80))
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // Favorites Section Header
             item(key = "favorites_header") {
                 SectionHeaderRow(

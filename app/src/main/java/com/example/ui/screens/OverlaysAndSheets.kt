@@ -36,10 +36,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Download
@@ -66,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -446,6 +450,7 @@ fun WallpaperAndSettingsSheet(
     onToggleSfx: (Boolean) -> Unit,
     onToggleHaptics: (Boolean) -> Unit,
     onCloseAllTabs: () -> Unit,
+    onOpenAccountSheet: () -> Unit = {},
     onEdgeBounce: (Float) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -536,6 +541,107 @@ fun WallpaperAndSettingsSheet(
                                     contentDescription = "Close settings",
                                     tint = style.contentPrimary,
                                     modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 0. Google Account & Cloud Sync Entry Card
+                item {
+                    val account = uiState.signedInAccount
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = stringResource(R.string.account_section_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = style.contentPrimary
+                        )
+
+                        FrostedGlassBox(
+                            shape = RoundedCornerShape(24.dp),
+                            elevation = GlassElevation.CARD,
+                            useLiveSceneBackdrop = false,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_account_button")
+                                .bouncyClickable(
+                                    pressedScale = 0.96f,
+                                    contentDescriptionText = stringResource(R.string.cd_account_button),
+                                    onClick = onOpenAccountSheet
+                                )
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                            ) {
+                                if (account != null) {
+                                    AccountAvatarBadge(
+                                        account = account,
+                                        sizeDp = 44
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = account.displayName,
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = style.contentPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = uiState.cloudSyncStatus
+                                                ?: account.email.ifBlank { "Google Cloud Sync active" },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = style.contentSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Outlined.CloudDone,
+                                        contentDescription = null,
+                                        tint = Color(0xFF4ADE80),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                } else {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .clip(CircleShape)
+                                            .background(style.activeSegmentFill)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.AccountCircle,
+                                            contentDescription = null,
+                                            tint = style.contentPrimary,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = stringResource(R.string.sign_in_with_google),
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = style.contentPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.account_sync_subtitle),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = style.contentSecondary,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = style.contentSecondary,
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         }

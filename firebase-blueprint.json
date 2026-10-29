@@ -1,0 +1,203 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated browser user profile and synced preferences. Clients must submit FieldValue.serverTimestamp() for createdAt and updatedAt.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID matching document ID."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name from Google Sign-In."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Owner-isolated email address from Google Sign-In."
+        },
+        "photoUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "Profile avatar URL."
+        },
+        "selectedWallpaperId": {
+          "type": "string",
+          "description": "Active Start Page wallpaper identifier."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudBookmark": {
+      "title": "CloudBookmark",
+      "description": "User-synced browser bookmark stored under the owner's user document. Clients must submit FieldValue.serverTimestamp() for createdAt and updatedAt.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Bookmarked page URL."
+        },
+        "title": {
+          "type": "string",
+          "description": "Bookmark display title."
+        },
+        "folder": {
+          "type": "string",
+          "description": "Bookmark folder name."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "url",
+        "title",
+        "folder",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudFavorite": {
+      "title": "CloudFavorite",
+      "description": "User-synced Start Page favorite shortcut. Clients must submit FieldValue.serverTimestamp() for createdAt and updatedAt.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID."
+        },
+        "title": {
+          "type": "string",
+          "description": "Shortcut label."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Shortcut destination URL."
+        },
+        "accentHex": {
+          "type": "integer",
+          "description": "ARGB accent color integer."
+        },
+        "position": {
+          "type": "integer",
+          "description": "Display order index."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "title",
+        "url",
+        "accentHex",
+        "position",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudReadingItem": {
+      "title": "CloudReadingItem",
+      "description": "User-synced Reading List article entry. Clients must submit FieldValue.serverTimestamp() for createdAt and updatedAt.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Article URL."
+        },
+        "title": {
+          "type": "string",
+          "description": "Article title."
+        },
+        "excerpt": {
+          "type": "string",
+          "description": "Short article summary or domain."
+        },
+        "isRead": {
+          "type": "boolean",
+          "description": "Whether the user has read the item."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "url",
+        "title",
+        "excerpt",
+        "isRead",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Owner-isolated user profile and Start Page wallpaper preference."
+    },
+    "/users/{userId}/bookmarks/{bookmarkId}": {
+      "schema": "CloudBookmark",
+      "description": "Owner-isolated synced browser bookmarks."
+    },
+    "/users/{userId}/favorites/{favoriteId}": {
+      "schema": "CloudFavorite",
+      "description": "Owner-isolated synced Start Page favorites."
+    },
+    "/users/{userId}/readingList/{itemId}": {
+      "schema": "CloudReadingItem",
+      "description": "Owner-isolated synced Reading List items."
+    }
+  }
+}

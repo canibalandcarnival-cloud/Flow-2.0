@@ -57,7 +57,6 @@ import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
 import com.example.ui.components.OverlappingTabsIcon
 import com.example.ui.components.bouncyClickable
-import com.example.ui.components.draggableGlassSurface
 import com.example.ui.theme.LocalGlassStyle
 
 /**
@@ -193,11 +192,8 @@ fun TopSegmentedGlassBar(
 }
 
 /**
- * Bottom floating & movable frosted-glass browser bar:
+ * Bottom floating stationary frosted-glass browser bar:
  * [ < Back ]  [ Search / Domain + WebTools ]  [ Siri iOS 26 Orb ]  [ Tabs ]
- *
- * Supports smooth drag repositioning (`draggableGlassSurface`) so moving the bar dynamically
- * refracts the live webpage or wallpaper directly underneath it!
  */
 @Composable
 fun BottomBrowserGlassBar(
@@ -226,10 +222,6 @@ fun BottomBrowserGlassBar(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .fillMaxWidth()
-            .draggableGlassSurface(
-                maxHorizontalOffsetPx = 320f,
-                maxVerticalOffsetPx = 900f
-            )
     ) {
         val metrics = DeviceOptimizationManager.computeAdaptiveMetrics(maxWidth, maxHeight)
         Row(

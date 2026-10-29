@@ -34,6 +34,13 @@ data class ResolvedWallpaper(
 object WallpaperLuminanceAnalyzer {
 
     val presets: List<PresetWallpaper> = listOf(
+        PresetWallpaper("preset:savanna", "Savanna Canopy", R.drawable.wp_savanna_canopy),
+        PresetWallpaper("preset:coastal", "Coastal Horizon", R.drawable.wp_coastal_horizon),
+        PresetWallpaper("preset:botanical", "Botanical Bloom", R.drawable.wp_botanical_bloom),
+        PresetWallpaper("preset:twilight", "Twilight Vista", R.drawable.wp_twilight_vista),
+        PresetWallpaper("preset:alpine_lake", "Alpine Peaks", R.drawable.wp_alpine_peaks),
+        PresetWallpaper("preset:wilderness", "Wilderness Trail", R.drawable.wp_wilderness_trail),
+        PresetWallpaper("preset:cascades", "Nordic Cascades", R.drawable.wp_nordic_cascades),
         PresetWallpaper("preset:forest", "Forest Canopy", R.drawable.wp_forest_canopy),
         PresetWallpaper("preset:alpine", "Midnight Peaks", R.drawable.wp_midnight_peaks),
         PresetWallpaper("preset:obsidian", "Obsidian Silk", R.drawable.wp_obsidian_silk),
@@ -118,7 +125,7 @@ object WallpaperLuminanceAnalyzer {
                 BitmapFactory.decodeFile(customFilePath, opts)
             } else {
                 val resId = presets.firstOrNull { it.id == wallpaperId }?.drawableRes
-                    ?: R.drawable.wp_forest_canopy
+                    ?: R.drawable.wp_savanna_canopy
                 val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeResource(context.resources, resId, boundsOpts)
                 val opts = BitmapFactory.Options().apply {
