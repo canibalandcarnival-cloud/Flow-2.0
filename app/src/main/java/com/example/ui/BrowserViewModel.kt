@@ -123,6 +123,7 @@ data class BrowserUiState(
     val canWebGoBack: Boolean = false,
     val canWebGoForward: Boolean = false,
     val siteNavigation: SiteNavigationBarData = SiteNavigationBarData(),
+    val siteTransitionNonce: Long = 0L,
     val statusToast: String? = null
 ) {
     val activeTab: BrowserTabEntity?
@@ -248,6 +249,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val canWebGoBack: Boolean = false,
         val canWebGoForward: Boolean = false,
         val siteNavByTab: Map<Long, SiteNavigationBarData> = emptyMap(),
+        val siteTransitionNonce: Long = 0L,
         val statusToast: String? = null
     )
 
@@ -360,6 +362,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             canWebGoBack = transient.canWebGoBack,
             canWebGoForward = transient.canWebGoForward,
             siteNavigation = resolvedSiteNav,
+            siteTransitionNonce = transient.siteTransitionNonce,
             statusToast = transient.statusToast
         )
     }.stateIn(
@@ -971,6 +974,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 isVideoPlaying = false,
                 isFullscreenVideo = false,
                 isReaderMode = false,
+                isLoadingWebPage = true,
+                webLoadProgress = 0.08f,
+                siteTransitionNonce = st.siteTransitionNonce + 1L,
                 siteNavByTab = if (current != null) {
                     st.siteNavByTab + (current.id to placeholderNav)
                 } else {
@@ -995,6 +1001,13 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val normalized = BrowserRepository.normalizeUrlOrSearch(rawUrl)
         if (normalized.isBlank()) return
         feedback.onTabZoom(opening = false)
+        transientState.update {
+            it.copy(
+                isLoadingWebPage = true,
+                webLoadProgress = 0.08f,
+                siteTransitionNonce = it.siteTransitionNonce + 1L
+            )
+        }
         viewModelScope.launch {
             repository.createNewTab(
                 isPrivate = uiState.value.settings.isPrivateMode,
@@ -1015,6 +1028,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             _webCommand.value = WebCommand.StopLoading
             transientState.update { it.copy(isLoadingWebPage = false, webLoadProgress = 0f) }
         } else {
+            transientState.update { it.copy(isLoadingWebPage = true, webLoadProgress = 0.08f) }
             _webCommand.value = WebCommand.Reload
         }
     }
@@ -1265,6 +1279,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun reloadCurrentPage() {
         feedback.onGlassTap()
+        transientState.update { it.copy(isLoadingWebPage = true, webLoadProgress = 0.08f) }
         _webCommand.value = WebCommand.Reload
     }
 
@@ -1286,7 +1301,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 isFullscreenVideo = false,
                 isReaderMode = false,
                 activeLinkContextTarget = null,
-                webLoadProgress = 0.12f,
+                webLoadProgress = st.webLoadProgress.coerceAtLeast(0.12f),
+                siteTransitionNonce = if (sameDomain) st.siteTransitionNonce else st.siteTransitionNonce + 1L,
                 siteNavByTab = nextMap
             )
         }

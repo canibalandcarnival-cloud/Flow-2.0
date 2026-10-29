@@ -137,4 +137,11 @@
     <string name="account_pill_sign_in">Sign In</string>
     <string name="account_manage_label">Account</string>
     <string name="cd_account_button">Google Account and cloud sync</string>
+
+    <!-- Browser Opening, Site Portal & Webpage Loading Animations -->
+    <string name="opening_browser_tagline">The Transparent Web Experience</string>
+    <string name="opening_browser_ready_pill">Liquid Glass Engine Ready</string>
+    <string name="loading_site_format">Loading %1$s…</string>
+    <string name="loading_web_fallback">Loading webpage…</string>
+    <string name="opening_site_format">Opening %1$s</string>
 </resources>

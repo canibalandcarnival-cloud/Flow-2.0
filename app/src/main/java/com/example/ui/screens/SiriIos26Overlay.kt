@@ -568,7 +568,7 @@ fun SiriIos26AssistantOverlay(
                                         color = Color(0xFFFF6B81),
                                         modifier = Modifier.testTag("siri_error_message")
                                     )
-                                    if (!aiState.retryPrompt.isNullOrBlank()) {
+                                    if (!aiState.retryPrompt.isNullOrBlank() || aiState.retrySmartDigest) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -580,7 +580,13 @@ fun SiriIos26AssistantOverlay(
                                                 .bouncyClickable(
                                                     pressedScale = 0.90f,
                                                     contentDescriptionText = "Retry Siri request",
-                                                    onClick = { onSubmitPrompt(aiState.retryPrompt) }
+                                                    onClick = {
+                                                        if (aiState.retrySmartDigest) {
+                                                            onSmartDigest()
+                                                        } else if (!aiState.retryPrompt.isNullOrBlank()) {
+                                                            onSubmitPrompt(aiState.retryPrompt)
+                                                        }
+                                                    }
                                                 )
                                                 .padding(horizontal = 14.dp)
                                         ) {

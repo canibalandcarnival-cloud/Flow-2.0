@@ -516,5 +516,95 @@ class ExampleRobolectricTest {
                 org.robolectric.shadows.ShadowLooper.idleMainLooper()
             }
         }
+
+    @Test
+    fun `custom GL launcher icon assets motion animation states and app check launcher recovery work`() =
+        kotlinx.coroutines.runBlocking {
+            val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+
+            // 1. Custom adaptive & legacy GL launcher icons and opening splash lockup resolve cleanly
+            assertNotNull(app.getDrawable(R.drawable.ic_launcher_fg_glass))
+            assertNotNull(app.getDrawable(R.drawable.ic_launcher_foreground))
+            assertNotNull(app.getDrawable(R.drawable.ic_launcher_background))
+            assertNotNull(app.getDrawable(R.drawable.brand_glass_logo))
+            assertNotNull(app.getDrawable(R.mipmap.ic_launcher))
+            assertNotNull(app.getDrawable(R.mipmap.ic_launcher_round))
+
+            // 2. App Check evicts stale token cache even when re-launched with the SAME debug token,
+            // and restores the backup debug secret when launched from the Home Screen icon (no extras)
+            val persistenceKey = FirebaseApp.getInstance().persistenceKey
+            val debugPrefs = app.getSharedPreferences(
+                "com.google.firebase.appcheck.debug.store.$persistenceKey",
+                Context.MODE_PRIVATE
+            )
+            val tokenCachePrefs = app.getSharedPreferences(
+                "com.google.firebase.appcheck.store.$persistenceKey",
+                Context.MODE_PRIVATE
+            )
+            val sameTokenIntent = Intent().apply {
+                putExtra("FIREBASE_APPCHECK_DEBUG_TOKEN", "persistent-harness-debug-token")
+            }
+            configureAppCheck(app, sameTokenIntent)
+            tokenCachePrefs.edit()
+                .putString("com.google.firebase.appcheck.APP_CHECK_TOKEN", "stale-pre-provision-jwt")
+                .commit()
+
+            // Re-run with identical debug token -> stale JWT must still be evicted
+            configureAppCheck(app, sameTokenIntent)
+            assertEquals(
+                null,
+                tokenCachePrefs.getString("com.google.firebase.appcheck.APP_CHECK_TOKEN", null)
+            )
+
+            // Clear debugPrefs to simulate a fresh store, then launch with empty launcher intent
+            debugPrefs.edit().clear().commit()
+            configureAppCheck(app, Intent(Intent.ACTION_MAIN))
+            assertEquals(
+                "persistent-harness-debug-token",
+                debugPrefs.getString("com.google.firebase.appcheck.debug.DEBUG_SECRET", null)
+            )
+
+            // 3. Opening a site immediately triggers siteTransitionNonce and loading animation state
+            val vm = com.example.ui.BrowserViewModel(app)
+            val collectJob = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+                vm.uiState.collect {}
+            }
+            try {
+                var attempts = 0
+                while (!vm.uiState.value.isReady && attempts < 50) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(35)
+                    attempts++
+                }
+                val initialNonce = vm.uiState.value.siteTransitionNonce
+                vm.openUrlOrSearch("https://www.apple.com")
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(40)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+
+                assertTrue(vm.uiState.value.isLoadingWebPage)
+                assertTrue(vm.uiState.value.webLoadProgress >= 0.08f)
+                assertTrue(vm.uiState.value.siteTransitionNonce > initialNonce)
+
+                val tabId = vm.uiState.value.activeTab?.id ?: 1L
+                vm.onWebPageFinished(
+                    tabId = tabId,
+                    url = "https://www.apple.com/",
+                    title = "Apple",
+                    canGoBack = false,
+                    canGoForward = false,
+                    isPrivate = false
+                )
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.delay(35)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                assertFalse(vm.uiState.value.isLoadingWebPage)
+                assertEquals(1f, vm.uiState.value.webLoadProgress, 0.001f)
+            } finally {
+                collectJob.cancel()
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            }
+        }
 }
+
 

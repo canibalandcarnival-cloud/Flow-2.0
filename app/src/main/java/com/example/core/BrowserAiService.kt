@@ -1,14 +1,19 @@
 package com.example.core
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.compose.runtime.Immutable
+import com.example.BuildConfig
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
+import com.google.firebase.appcheck.recaptcha.RecaptchaAppCheckProviderFactory
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -16,9 +21,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 private const val TAG = "BrowserAiService"
+private const val TOKEN_CACHE_STORE_PREFIX = "com.google.firebase.appcheck.store."
+private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 
 @Immutable
 data class WebPageAiContext(
@@ -60,7 +68,11 @@ sealed interface SiriAiUiState {
         val isVision: Boolean = false
     ) : SiriAiUiState
     data class DigestSuccess(val digest: SmartPageDigest) : SiriAiUiState
-    data class Error(val message: String, val retryPrompt: String? = null) : SiriAiUiState
+    data class Error(
+        val message: String,
+        val retryPrompt: String? = null,
+        val retrySmartDigest: Boolean = false
+    ) : SiriAiUiState
 }
 
 /**
@@ -68,8 +80,8 @@ sealed interface SiriAiUiState {
  * iOS 26 Siri Intelligence assistant.
  *
  * Strictly initializes `Firebase.ai.generativeModel(...)` lazily via `by lazy`, wraps every
- * model request in a 60-second coroutine timeout, preserves `CancellationException`, and
- * surfaces authentic errors directly to the UI state.
+ * model request in a 60-second coroutine timeout, preserves `CancellationException`, refreshes
+ * stale App Check tokens automatically if needed, and surfaces authentic errors directly to UI state.
  */
 class BrowserAiService {
 
@@ -145,6 +157,7 @@ class BrowserAiService {
                     }
                     text(fullPrompt)
                 }
+
                 suspend fun collectStream() {
                     conversationalModel.generateContentStream(requestContent).collect { chunk ->
                         val piece = chunk.text.orEmpty()
@@ -165,10 +178,28 @@ class BrowserAiService {
                     collectStream()
                 } catch (firstErr: Exception) {
                     if (firstErr is CancellationException) throw firstErr
-                    if (accumulated.isEmpty() && isAppCheckTokenError(firstErr)) {
-                        Log.w(TAG, "Refreshing App Check token and retrying stream once", firstErr)
-                        forceRefreshAppCheckToken()
-                        collectStream()
+                    if (accumulated.isEmpty()) {
+                        if (isAppCheckTokenError(firstErr)) {
+                            Log.w(TAG, "Evicting stale App Check cache & retrying Siri stream", firstErr)
+                            forceRefreshAppCheckToken()
+                        }
+                        try {
+                            collectStream()
+                        } catch (secondErr: Exception) {
+                            if (secondErr is CancellationException) throw secondErr
+                            if (accumulated.isEmpty()) {
+                                // Unary fallback if SSE stream framing encountered a transport error
+                                val unary = conversationalModel.generateContent(requestContent)
+                                val unaryText = unary.text.orEmpty()
+                                if (unaryText.isNotBlank()) {
+                                    accumulated.append(unaryText)
+                                } else {
+                                    throw secondErr
+                                }
+                            } else {
+                                throw secondErr
+                            }
+                        }
                     } else {
                         throw firstErr
                     }
@@ -209,7 +240,7 @@ class BrowserAiService {
             Log.e(TAG, "Firebase AI streaming failed", e)
             emit(
                 SiriAiUiState.Error(
-                    message = e.localizedMessage ?: "AI generation failed.",
+                    message = formatReadableAiError(e),
                     retryPrompt = userPrompt
                 )
             )
@@ -246,7 +277,7 @@ class BrowserAiService {
                 } catch (firstErr: Exception) {
                     if (firstErr is CancellationException) throw firstErr
                     if (isAppCheckTokenError(firstErr)) {
-                        Log.w(TAG, "Refreshing App Check token and retrying digest once", firstErr)
+                        Log.w(TAG, "Evicting stale App Check cache & retrying Smart Digest", firstErr)
                         forceRefreshAppCheckToken()
                         structuredDigestModel.generateContent(promptText)
                     } else {
@@ -255,7 +286,10 @@ class BrowserAiService {
                 }
             }
             val jsonString = response.text
-                ?: return SiriAiUiState.Error("Model returned an empty digest response.")
+                ?: return SiriAiUiState.Error(
+                    message = "Model returned an empty digest response.",
+                    retrySmartDigest = true
+                )
 
             val json = JSONObject(jsonString)
             val headline = json.optString("headline", "Smart Page Digest")
@@ -293,12 +327,18 @@ class BrowserAiService {
             )
         } catch (e: TimeoutCancellationException) {
             Log.e(TAG, "Smart Digest generation timed out", e)
-            SiriAiUiState.Error("Smart Digest timed out after 60 seconds. Please try again.")
+            SiriAiUiState.Error(
+                message = "Smart Digest timed out after 60 seconds. Please try again.",
+                retrySmartDigest = true
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Smart Digest generation failed", e)
-            SiriAiUiState.Error(e.localizedMessage ?: "Failed to generate Smart Digest.")
+            SiriAiUiState.Error(
+                message = formatReadableAiError(e),
+                retrySmartDigest = true
+            )
         }
     }
 
@@ -344,11 +384,41 @@ class BrowserAiService {
 
     private suspend fun forceRefreshAppCheckToken() {
         try {
-            val task = FirebaseAppCheck.getInstance().getAppCheckToken(true)
-            suspendCancellableCoroutine<Unit> { cont ->
-                task.addOnCompleteListener {
-                    if (cont.isActive) {
-                        cont.resume(Unit)
+            val firebaseApp = FirebaseApp.getInstance()
+            val appContext = firebaseApp.applicationContext
+            // Clear any stale on-disk cached JWT synchronously before requesting a fresh token
+            appContext.getSharedPreferences(
+                "$TOKEN_CACHE_STORE_PREFIX${firebaseApp.persistenceKey}",
+                Context.MODE_PRIVATE
+            ).edit().clear().commit()
+
+            if (BuildConfig.DEBUG) {
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    DebugAppCheckProviderFactory.getInstance()
+                )
+            } else {
+                val resId = appContext.resources.getIdentifier(
+                    RECAPTCHA_SITE_KEY_RES,
+                    "string",
+                    appContext.packageName
+                )
+                if (resId != 0) {
+                    val siteKey = appContext.getString(resId)
+                    if (siteKey.isNotBlank()) {
+                        FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                            RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+                        )
+                    }
+                }
+            }
+
+            withTimeoutOrNull(8_000L) {
+                val task = FirebaseAppCheck.getInstance().getAppCheckToken(true)
+                suspendCancellableCoroutine<Unit> { cont ->
+                    task.addOnCompleteListener {
+                        if (cont.isActive) {
+                            cont.resume(Unit)
+                        }
                     }
                 }
             }
@@ -360,16 +430,21 @@ class BrowserAiService {
     }
 
     private fun isAppCheckTokenError(error: Throwable): Boolean {
-        val combined = buildString {
-            append(error.message.orEmpty())
-            append(' ')
-            append(error.localizedMessage.orEmpty())
-            append(' ')
-            append(error.cause?.message.orEmpty())
-        }
+        val combined = generateSequence(error) { it.cause }
+            .take(6)
+            .joinToString(" ") { "${it.javaClass.simpleName}: ${it.message.orEmpty()} ${it.localizedMessage.orEmpty()}" }
         return combined.contains("app check", ignoreCase = true) ||
             combined.contains("appcheck", ignoreCase = true) ||
-            combined.contains("attestation", ignoreCase = true)
+            combined.contains("attestation", ignoreCase = true) ||
+            combined.contains("403", ignoreCase = true) ||
+            combined.contains("401", ignoreCase = true) ||
+            combined.contains("unauthenticated", ignoreCase = true) ||
+            combined.contains("permission_denied", ignoreCase = true)
+    }
+
+    private fun formatReadableAiError(error: Throwable): String {
+        val raw = error.localizedMessage ?: error.message ?: "AI generation failed."
+        return raw.trim().ifBlank { "AI generation failed." }
     }
 
     companion object {

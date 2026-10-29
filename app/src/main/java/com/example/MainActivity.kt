@@ -20,7 +20,10 @@ class MainActivity : ComponentActivity() {
     private val incomingSystemIntent =
         MutableStateFlow<OsShellManager.SystemShellIntentAction?>(null)
 
+    private var isViewModelCreated = false
+
     private val browserViewModel: BrowserViewModel by lazy {
+        isViewModelCreated = true
         ViewModelProvider(this)[BrowserViewModel::class.java]
     }
 
@@ -62,6 +65,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        browserViewModel.trimMemory(level)
+        if (isViewModelCreated) {
+            browserViewModel.trimMemory(level)
+        }
     }
 }

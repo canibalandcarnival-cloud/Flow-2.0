@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,6 +82,7 @@ import com.example.core.GpuRenderController
 import com.example.core.OsShellManager
 import com.example.core.SiriAiUiState
 import com.example.core.SiteNavBarVariant
+import com.example.data.BrowserTabEntity
 import com.example.ui.components.FrostedGlassBox
 import com.example.ui.components.GlassElevation
 import com.example.ui.components.GlassMotionTracker
@@ -93,6 +95,7 @@ import com.example.ui.screens.AccountAuthGlassSheet
 import com.example.ui.screens.AddressSearchOverlay
 import com.example.ui.screens.BottomBrowserGlassBar
 import com.example.ui.screens.BrowserHubContent
+import com.example.ui.screens.BrowserOpeningGlassAnimation
 import com.example.ui.screens.FindInPageGlassBar
 import com.example.ui.screens.NewTabGroupDialog
 import com.example.ui.screens.SiriIos26AssistantOverlay
@@ -100,11 +103,14 @@ import com.example.ui.screens.SiriIos26PerimeterAura
 import com.example.ui.screens.SiriLiquidOrbIcon
 import com.example.ui.screens.SiteBookmarksQuickSheet
 import com.example.ui.screens.SiteGlassNavigationBar
+import com.example.ui.screens.SiteOpeningGlassVeil
+import com.example.ui.screens.SitePortalTransitionContainer
 import com.example.ui.screens.TabSwitcherOverlay
 import com.example.ui.screens.TopSegmentedGlassBar
 import com.example.ui.screens.WallpaperAndSettingsSheet
 import com.example.ui.screens.WebBrowserView
 import com.example.ui.screens.WebContextMenuGlassSheet
+import com.example.ui.screens.WebPageGlassLoadingAnimation
 import com.example.ui.screens.WebToolsGlassSheet
 import com.example.ui.theme.GlassBrowserTheme
 import com.example.ui.theme.LocalGlassStyle
@@ -134,6 +140,7 @@ fun GlassBrowserApp(
         mutableStateOf(OsShellManager.queryRoleStatus(context))
     }
     var isNewGroupDialogOpen by remember { mutableStateOf(false) }
+    var isOpeningAnimationVisible by rememberSaveable { mutableStateOf(true) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var siteBarMeasuredHeightPx by remember { mutableIntStateOf(0) }
     val glassMotionTracker = remember { GlassMotionTracker() }
@@ -296,6 +303,11 @@ fun GlassBrowserApp(
     }
 
     val activeTab = uiState.activeTab
+    val isLiveWebActive = activeTab != null && activeTab.url.isNotBlank()
+    var retainedWebTab by remember { mutableStateOf<BrowserTabEntity?>(null) }
+    if (isLiveWebActive && activeTab != null) {
+        retainedWebTab = activeTab
+    }
     val webBlurredBackdrop = viewModel.liveWebBlurredBackdrop
 
     val spatialBackdrop = remember(
@@ -398,109 +410,141 @@ fun GlassBrowserApp(
                             }
                         )
                 ) {
-                    if (activeTab != null && activeTab.url.isNotBlank()) {
-                        WebBrowserView(
-                            tabId = activeTab.id,
-                            url = activeTab.url,
-                            isPrivate = activeTab.isPrivate,
-                            forceGpuRendering = uiState.settings.forceGpuRendering,
-                            enableGpuRasterization = uiState.settings.enableGpuRasterization,
-                            disableHardwareOverlays = uiState.settings.disableHardwareOverlays,
-                            replaceSiteNavBar = uiState.settings.replaceSiteNavBar,
-                            bottomWebClearance = animatedBottomWebClearance,
-                            dockShelfColor = activeDockShelfColor,
-                            isTabSwitcherOpen = uiState.isTabSwitcherOpen,
-                            deviceProfile = uiState.deviceProfile,
-                            webCommand = webCommand,
-                            onConsumeCommand = viewModel::consumeWebCommand,
-                            onPageStarted = viewModel::onWebPageStarted,
-                            onProgressChanged = viewModel::onWebProgressChanged,
-                            onPageFinished = viewModel::onWebPageFinished,
-                            onVideoPlaybackChanged = viewModel::onWebVideoPlaybackChanged,
-                            onFullscreenVideoChanged = viewModel::onWebFullscreenVideoChanged,
-                            onSnapshotCaptured = viewModel::updateTabSnapshot,
-                            onLiveBackdropCaptured = viewModel::updateLiveWebBackdropOnly,
-                            onFindResultsUpdated = viewModel::onFindResultsUpdated,
-                            onSslSummaryUpdated = viewModel::updateSslCertificateSummary,
-                            onPageAiContextUpdated = viewModel::updatePageAiContext,
-                            onSiteNavigationJsonReceived = viewModel::onSiteNavigationJsonReceived,
-                            onDownloadRequested = viewModel::startWebOrDirectDownload,
-                            onSaveBlobDownload = viewModel::saveBlobBase64Download,
-                            onLinkContextTargetChanged = viewModel::setLinkContextTarget,
-                            onEdgeBounce = viewModel.feedback::onEdgeBounce,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .drawWithContent {
-                                    drawContent()
-                                    sceneBlurredLayer.record {
-                                        this@drawWithContent.drawContent()
-                                    }
-                                }
-                        ) {
+                    SitePortalTransitionContainer(
+                        isViewingWebPage = isLiveWebActive,
+                        modifier = Modifier.fillMaxSize(),
+                        webContent = {
+                            val targetTab = if (isLiveWebActive) activeTab else retainedWebTab
+                            if (targetTab != null && targetTab.url.isNotBlank()) {
+                                WebBrowserView(
+                                    tabId = targetTab.id,
+                                    url = targetTab.url,
+                                    isPrivate = targetTab.isPrivate,
+                                    forceGpuRendering = uiState.settings.forceGpuRendering,
+                                    enableGpuRasterization = uiState.settings.enableGpuRasterization,
+                                    disableHardwareOverlays = uiState.settings.disableHardwareOverlays,
+                                    replaceSiteNavBar = uiState.settings.replaceSiteNavBar,
+                                    bottomWebClearance = animatedBottomWebClearance,
+                                    dockShelfColor = activeDockShelfColor,
+                                    isTabSwitcherOpen = uiState.isTabSwitcherOpen,
+                                    deviceProfile = uiState.deviceProfile,
+                                    webCommand = webCommand,
+                                    onConsumeCommand = viewModel::consumeWebCommand,
+                                    onPageStarted = viewModel::onWebPageStarted,
+                                    onProgressChanged = viewModel::onWebProgressChanged,
+                                    onPageFinished = viewModel::onWebPageFinished,
+                                    onVideoPlaybackChanged = viewModel::onWebVideoPlaybackChanged,
+                                    onFullscreenVideoChanged = viewModel::onWebFullscreenVideoChanged,
+                                    onSnapshotCaptured = viewModel::updateTabSnapshot,
+                                    onLiveBackdropCaptured = viewModel::updateLiveWebBackdropOnly,
+                                    onFindResultsUpdated = viewModel::onFindResultsUpdated,
+                                    onSslSummaryUpdated = viewModel::updateSslCertificateSummary,
+                                    onPageAiContextUpdated = viewModel::updatePageAiContext,
+                                    onSiteNavigationJsonReceived = viewModel::onSiteNavigationJsonReceived,
+                                    onDownloadRequested = viewModel::startWebOrDirectDownload,
+                                    onSaveBlobDownload = viewModel::saveBlobBase64Download,
+                                    onLinkContextTargetChanged = viewModel::setLinkContextTarget,
+                                    onEdgeBounce = viewModel.feedback::onEdgeBounce,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        },
+                        startPageContent = {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .graphicsLayer()
                                     .drawWithContent {
                                         drawContent()
-                                        wallpaperBlurredLayer.record {
+                                        sceneBlurredLayer.record {
                                             this@drawWithContent.drawContent()
                                         }
                                     }
                             ) {
-                                val resolvedWp = uiState.resolvedWallpaper
-                                if (resolvedWp != null) {
-                                    Image(
-                                        bitmap = resolvedWp.fullBitmap,
-                                        contentDescription = null,
-                                        colorFilter = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.wp_savanna_canopy),
-                                        contentDescription = null,
-                                        colorFilter = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer()
+                                        .drawWithContent {
+                                            drawContent()
+                                            wallpaperBlurredLayer.record {
+                                                this@drawWithContent.drawContent()
+                                            }
+                                        }
+                                ) {
+                                    val resolvedWp = uiState.resolvedWallpaper
+                                    if (resolvedWp != null) {
+                                        Image(
+                                            bitmap = resolvedWp.fullBitmap,
+                                            contentDescription = null,
+                                            colorFilter = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Image(
+                                            painter = painterResource(id = R.drawable.wp_savanna_canopy),
+                                            contentDescription = null,
+                                            colorFilter = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
                                 }
-                            }
 
-                            BrowserHubContent(
-                                uiState = uiState,
-                                topContentPadding = statusTopInset + 74.dp,
-                                bottomContentPadding = navBottomInset + 92.dp,
-                                onOpenUrl = viewModel::openUrlOrSearch,
-                                onToggleShowAllFavorites = viewModel::toggleShowAllFavorites,
-                                onToggleShowAllReadingList = viewModel::toggleShowAllReadingList,
-                                onOpenCustomizeSheet = { viewModel.setSettingsSheetOpen(true) },
-                                onOpenAccountSheet = { viewModel.setAccountSheetOpen(true) },
-                                onDeleteReadingItem = viewModel::removeReadingListItem,
-                                onDeleteBookmark = viewModel::removeBookmark,
-                                onClearHistory = viewModel::clearBrowsingHistory,
-                                onStartDirectDownload = { directUrl ->
-                                    viewModel.startWebOrDirectDownload(url = directUrl)
-                                },
-                                onOpenDownload = { item -> viewModel.openDownloadItem(context, item) },
-                                onShareDownload = { item -> viewModel.shareDownloadItem(context, item) },
-                                onRetryDownload = viewModel::retryDownloadItem,
-                                onDeleteDownload = viewModel::deleteDownloadItem,
-                                onClearCompletedDownloads = viewModel::clearCompletedDownloads,
-                                onEdgeBounce = viewModel.feedback::onEdgeBounce
-                            )
+                                BrowserHubContent(
+                                    uiState = uiState,
+                                    topContentPadding = statusTopInset + 74.dp,
+                                    bottomContentPadding = navBottomInset + 92.dp,
+                                    onOpenUrl = viewModel::openUrlOrSearch,
+                                    onToggleShowAllFavorites = viewModel::toggleShowAllFavorites,
+                                    onToggleShowAllReadingList = viewModel::toggleShowAllReadingList,
+                                    onOpenCustomizeSheet = { viewModel.setSettingsSheetOpen(true) },
+                                    onOpenAccountSheet = { viewModel.setAccountSheetOpen(true) },
+                                    onDeleteReadingItem = viewModel::removeReadingListItem,
+                                    onDeleteBookmark = viewModel::removeBookmark,
+                                    onClearHistory = viewModel::clearBrowsingHistory,
+                                    onStartDirectDownload = { directUrl ->
+                                        viewModel.startWebOrDirectDownload(url = directUrl)
+                                    },
+                                    onOpenDownload = { item -> viewModel.openDownloadItem(context, item) },
+                                    onShareDownload = { item -> viewModel.shareDownloadItem(context, item) },
+                                    onRetryDownload = viewModel::retryDownloadItem,
+                                    onDeleteDownload = viewModel::deleteDownloadItem,
+                                    onClearCompletedDownloads = viewModel::clearCompletedDownloads,
+                                    onEdgeBounce = viewModel.feedback::onEdgeBounce
+                                )
+                            }
                         }
-                    }
+                    )
                 }
 
                 // =========================================================================
-                // PLANE 2: Floating Spatial Frosted Glass Chrome, WebView Tools & Siri iOS 26
+                // PLANE 2: Floating Spatial Frosted Glass Chrome, Motion Animations & Siri iOS 26
                 // =========================================================================
+
+                // Site Opening Liquid-Glass Portal Ripple Veil (non-blocking)
+                if (uiState.isViewingWebPage && !uiState.isTabSwitcherOpen) {
+                    SiteOpeningGlassVeil(
+                        siteTransitionNonce = uiState.siteTransitionNonce,
+                        siteBrand = uiState.siteNavigation.siteBrand.ifBlank {
+                            uiState.siteNavigation.displayDomain
+                        }
+                    )
+                }
+
+                // Webpage Liquid-Glass Loading Animation (Top Shimmer Wave + Floating Orbital Prism Pill)
+                WebPageGlassLoadingAnimation(
+                    visible = uiState.isViewingWebPage &&
+                        uiState.isLoadingWebPage &&
+                        !uiState.isFullscreenVideo &&
+                        !uiState.isTabSwitcherOpen &&
+                        !uiState.isFindInPageOpen,
+                    progress = uiState.webLoadProgress,
+                    siteTitleOrDomain = uiState.siteNavigation.displayDomain.ifBlank {
+                        uiState.siteNavigation.siteBrand
+                    },
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
 
                 // Top 5-Segment Glass Pill (Start Page | Bookmarks | Reading List | History | Downloads)
                 AnimatedVisibility(
@@ -1062,6 +1106,12 @@ fun GlassBrowserApp(
                         )
                     }
                 }
+
+                // Cold-Start Liquid-Glass Browser Opening Animation
+                BrowserOpeningGlassAnimation(
+                    visible = isOpeningAnimationVisible,
+                    onAnimationFinished = { isOpeningAnimationVisible = false }
+                )
             }
         }
     }
